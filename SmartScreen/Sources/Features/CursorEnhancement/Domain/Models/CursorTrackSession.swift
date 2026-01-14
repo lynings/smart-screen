@@ -3,7 +3,16 @@ import Foundation
 /// Stores cursor tracking data for a recording session
 struct CursorTrackSession: Codable {
     let events: [MouseEvent]
+    let keyboardEvents: [KeyboardEvent]
     let duration: TimeInterval
+    
+    // MARK: - Initialization
+    
+    init(events: [MouseEvent], keyboardEvents: [KeyboardEvent] = [], duration: TimeInterval) {
+        self.events = events
+        self.keyboardEvents = keyboardEvents
+        self.duration = duration
+    }
     
     // MARK: - Computed Properties
     
@@ -15,6 +24,11 @@ struct CursorTrackSession: Codable {
     
     var clickEvents: [ClickEvent] {
         events.compactMap { $0.toClickEvent() }
+    }
+    
+    /// Non-modifier keyboard events (actual typing, not just Shift/Cmd/etc.)
+    var typingEvents: [KeyboardEvent] {
+        keyboardEvents.filter { !$0.isModifier }
     }
     
     // MARK: - Trajectory Processing

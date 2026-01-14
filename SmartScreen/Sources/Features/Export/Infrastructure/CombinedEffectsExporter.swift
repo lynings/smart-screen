@@ -67,9 +67,9 @@ actor CombinedEffectsExporter {
         
         print("[CombinedExporter] Video size: \(videoSize), duration: \(duration.seconds)s")
         
-        // 2. Generate smart zoom timeline using behavior analysis
-        let smartTimeline = createSmartZoomTimeline(from: cursorSession)
-        print("[CombinedExporter] Generated \(smartTimeline.keyframes.count) smart zoom keyframes")
+        // 2. Generate zoom timeline from click events (AC-based approach)
+        let zoomTimeline = createZoomTimeline(from: cursorSession, screenSize: videoSize)
+        print("[CombinedExporter] Generated \(zoomTimeline.segmentCount) zoom segments")
         
         // 3. Setup reader
         let reader = try AVAssetReader(asset: asset)
@@ -126,8 +126,18 @@ actor CombinedEffectsExporter {
                 let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
                 let timeSeconds = presentationTime.seconds
                 
-                // Get smart zoom state (handles stabilization, large movements, etc.)
-                let (currentScale, currentCenter) = smartTimeline.state(at: timeSeconds)
+                // Get cursor position for follow mode (AC-FU-02)
+                let cursorPosition = cursorSession.positionAt(time: timeSeconds)
+                
+                // Get zoom state with follow mode support
+                let zoomState = zoomTimeline.state(
+                    at: timeSeconds,
+                    cursorPosition: cursorPosition,
+                    followCursor: autoZoomSettings.followCursor,
+                    smoothing: autoZoomSettings.cursorSmoothing
+                )
+                let currentScale = zoomState.scale
+                let currentCenter = zoomState.center
                 
                 // Get cursor highlights for this frame
                 let highlights = activeHighlights(at: timeSeconds, cursorSession: cursorSession, videoSize: videoSize)
@@ -306,23 +316,37 @@ actor CombinedEffectsExporter {
         return buffer
     }
     
-    // MARK: - Smart Zoom Timeline Creation
+    // MARK: - Zoom Timeline Creation
     
-    /// Create smart zoom timeline using behavior analysis
-    /// - Waits for cursor stabilization before zooming
-    /// - Zooms out first on large/rapid movements
-    /// - Smooth transitions between zoom states
-    private nonisolated func createSmartZoomTimeline(
-        from session: CursorTrackSession
-    ) -> SmartZoomTimeline {
+    /// Create zoom timeline from cursor session using AC-based approach
+    /// AC-TR-01: Only clicks trigger zoom
+    /// AC-TR-02: No clicks = no zoom
+    /// AC-TR-03: Nearby clicks are merged
+    private nonisolated func createZoomTimeline(
+        from session: CursorTrackSession,
+        screenSize: CGSize
+    ) -> ZoomTimeline {
         guard autoZoomSettings.isEnabled else {
-            return SmartZoomTimeline.empty(duration: session.duration)
+            return ZoomTimeline.empty(duration: session.duration)
         }
         
-        // Create behavior config from settings
-        let behaviorConfig = ZoomBehaviorConfig.from(settings: autoZoomSettings)
+        // Create generator config from settings
+        let generatorConfig = ZoomSegmentGenerator.Config(
+            defaultDuration: autoZoomSettings.holdTime + autoZoomSettings.duration * 2,
+            defaultZoomScale: autoZoomSettings.zoomLevel,
+            clickMergeTime: 0.3,
+            clickMergeDistancePixels: 100,
+            segmentMergeGap: 0.3,
+            segmentMergeDistance: 0.05,
+            minZoomScale: 1.0,
+            maxZoomScale: 6.0,
+            easing: autoZoomSettings.easing
+        )
         
-        let analyzer = SmartZoomBehaviorAnalyzer(config: behaviorConfig)
-        return analyzer.analyze(session: session)
+        return ZoomTimeline.from(
+            session: session,
+            screenSize: screenSize,
+            config: generatorConfig
+        )
     }
 }
