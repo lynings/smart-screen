@@ -13,8 +13,10 @@ Execute technical tasks using strict **Test-Driven Development**. Write tests fi
 ## Workflow
 
 ```
-Pick task → Write failing test (Red) → Implement (Green) → Refactor → Verify → Next task
+Pick task → Write failing test (Red) → Implement (Green) → Refactor → Verify → Next task → Update spec
 ```
+
+> **📝 Important**: After completing all TDD cycles for a feature, update the corresponding `*-spec.md` file (e.g., `technical-spec.md`, `functional-spec.md`) to reflect the actual implementation and ensure documentation stays in sync with code.
 
 ## Prerequisites
 
@@ -158,6 +160,59 @@ xcodebuild test -scheme SmartScreen
 
 Repeat cycle with next behavior scenario.
 
+### Step 8: Update Specification Document
+
+After completing all TDD cycles for the feature, update the corresponding specification document:
+
+**What to update:**
+
+1. **Implementation Status**
+   - Mark completed features as `✅ Implemented`
+   - Update any "TODO" or "Pending" items
+
+2. **Actual Implementation Details**
+   - Document the final API design (if different from initial spec)
+   - Update class/function names to match actual code
+   - Note any design decisions made during implementation
+
+3. **Test Coverage**
+   - Document what test scenarios were covered
+   - Note any edge cases discovered during TDD
+
+4. **Known Limitations**
+   - Document any simplifications or trade-offs made
+   - Note future improvements identified during implementation
+
+**Example spec update:**
+
+```markdown
+## Implementation Status
+
+### ✅ Completed Features
+
+- [x] RecordingViewModel with start/stop functionality
+- [x] Permission handling
+- [x] Error state management
+
+### Implementation Notes
+
+- Used `@Observable` macro instead of `ObservableObject` protocol
+- Error handling uses `RecordingError` enum with associated values
+- Tests cover: permission granted/denied, capture failures, state transitions
+
+### Test Coverage
+
+- `test_should_start_recording_when_permission_granted`
+- `test_should_show_permission_error_when_denied`
+- `test_should_handle_capture_failure_gracefully`
+```
+
+**Spec file locations:**
+
+- Technical specs: `knowledge-base/03-specifications/<feature>/technical-spec.md`
+- Functional specs: `knowledge-base/03-specifications/<feature>/functional-spec.md`
+- UI specs: `knowledge-base/03-specifications/<feature>/ui-spec.md`
+
 ## Quality Gates
 
 ### Before Commit
@@ -187,6 +242,7 @@ xcodebuild test -scheme SmartScreen -enableCodeCoverage YES
 | Test file | Yes | Following [Testing Strategy](../rules/testing-strategy.md) |
 | Implementation | Yes | Minimal to pass tests |
 | Mock/Fixture | As needed | See [Testing Strategy - Mock Pattern](../rules/testing-strategy.md#mock-pattern) |
+| Updated spec | Yes | Update `*-spec.md` after completing all TDD cycles |
 
 ## Validation Checklist
 
@@ -197,6 +253,8 @@ xcodebuild test -scheme SmartScreen -enableCodeCoverage YES
 - [ ] Code refactored while tests pass
 - [ ] Follows [Testing Strategy](../rules/testing-strategy.md) conventions
 - [ ] All quality gates pass
+- [ ] Specification document (`*-spec.md`) updated to reflect actual implementation
+- [ ] Spec updates include: implementation status, actual API design, test coverage, known limitations
 - [ ] Commit follows git standards
 
 ## Common Pitfalls
@@ -222,3 +280,7 @@ Only mock external dependencies (system APIs, network, persistence). Don't mock 
 ### ❌ Skipping refactor step
 
 Always look for opportunities to improve code after making the test pass.
+
+### ❌ Forgetting to update spec
+
+After completing implementation, update the specification document to keep it in sync with the actual code. This ensures documentation accuracy and helps future developers understand what was actually built.

@@ -14,7 +14,6 @@ final class MouseTrackerManager {
     private(set) var isTracking = false
     private(set) var startTime: Date?
     private(set) var events: [MouseEvent] = []
-    private(set) var keyboardEvents: [KeyboardEvent] = []
     
     /// Recording screen info (captured at start of tracking)
     private var recordingScreen: NSScreen?
@@ -23,8 +22,6 @@ final class MouseTrackerManager {
     
     private var globalMonitor: Any?
     private var localMonitor: Any?
-    private var keyboardGlobalMonitor: Any?
-    private var keyboardLocalMonitor: Any?
     private var positionTimer: Timer?
     private var lastPosition: CGPoint?
     
@@ -56,7 +53,6 @@ final class MouseTrackerManager {
         isTracking = true
         startTime = Date()
         events.removeAll()
-        keyboardEvents.removeAll()
         lastPosition = nil
         
         // 1. Capture recording screen info at start
@@ -66,9 +62,8 @@ final class MouseTrackerManager {
         print("[MouseTrackerManager] Recording frame: \(recordingFrame)")
         print("[MouseTrackerManager] Backing scale: \(backingScaleFactor)")
         
-        // 2. Setup event monitors (mouse + keyboard)
+        // 2. Setup event monitors
         setupEventMonitors()
-        setupKeyboardMonitors()
         setupPositionPolling()
         
         print("[MouseTrackerManager] Tracking started")
@@ -78,7 +73,6 @@ final class MouseTrackerManager {
         print("[MouseTrackerManager] Stopping tracking, events recorded: \(events.count)")
         print("[MouseTrackerManager] Move events: \(events.filter { $0.type == .move }.count)")
         print("[MouseTrackerManager] Click events: \(events.filter { $0.type != .move }.count)")
-        print("[MouseTrackerManager] Keyboard events: \(keyboardEvents.count)")
         
         isTracking = false
         teardownEventMonitors()
@@ -87,7 +81,6 @@ final class MouseTrackerManager {
     func reset() {
         stopTracking()
         events.removeAll()
-        keyboardEvents.removeAll()
         startTime = nil
         lastPosition = nil
         recordingScreen = nil
@@ -234,42 +227,6 @@ final class MouseTrackerManager {
         recordEvent(mouseEvent)
     }
     
-    // MARK: - Keyboard Monitors
-    
-    private func setupKeyboardMonitors() {
-        let keyMask: NSEvent.EventTypeMask = [.keyDown]
-        
-        // Global monitor for keyboard events
-        keyboardGlobalMonitor = NSEvent.addGlobalMonitorForEvents(matching: keyMask) { [weak self] event in
-            Task { @MainActor in
-                self?.handleKeyboardEvent(event)
-            }
-        }
-        
-        // Local monitor for keyboard events
-        keyboardLocalMonitor = NSEvent.addLocalMonitorForEvents(matching: keyMask) { [weak self] event in
-            Task { @MainActor in
-                self?.handleKeyboardEvent(event)
-            }
-            return event
-        }
-        
-        if keyboardGlobalMonitor != nil {
-            print("[MouseTrackerManager] ✅ Global keyboard monitor created")
-        }
-    }
-    
-    private func handleKeyboardEvent(_ event: NSEvent) {
-        guard isTracking, let startTime else { return }
-        
-        // Ignore modifier-only keys and function keys
-        guard !event.characters.isNilOrEmpty else { return }
-        
-        let timestamp = Date().timeIntervalSince(startTime)
-        let keyboardEvent = KeyboardEvent(timestamp: timestamp, type: .keyDown)
-        keyboardEvents.append(keyboardEvent)
-    }
-    
     private func teardownEventMonitors() {
         if let globalMonitor {
             NSEvent.removeMonitor(globalMonitor)
@@ -281,32 +238,9 @@ final class MouseTrackerManager {
             self.localMonitor = nil
         }
         
-        if let keyboardGlobalMonitor {
-            NSEvent.removeMonitor(keyboardGlobalMonitor)
-            self.keyboardGlobalMonitor = nil
-        }
-        
-        if let keyboardLocalMonitor {
-            NSEvent.removeMonitor(keyboardLocalMonitor)
-            self.keyboardLocalMonitor = nil
-        }
-        
         positionTimer?.invalidate()
         positionTimer = nil
         
         print("[MouseTrackerManager] Monitors removed")
-    }
-}
-
-// MARK: - Optional String Extension
-
-private extension Optional where Wrapped == String {
-    var isNilOrEmpty: Bool {
-        switch self {
-        case .none:
-            return true
-        case .some(let value):
-            return value.isEmpty
-        }
     }
 }

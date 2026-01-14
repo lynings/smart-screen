@@ -1,8 +1,20 @@
 import Foundation
 import AppKit
 
+/// Represents a keyboard event
+struct KeyboardEvent: Equatable {
+    let type: KeyboardEventType
+    let timestamp: TimeInterval
+    let keyCode: UInt16
+    
+    enum KeyboardEventType: Equatable {
+        case keyDown
+        case keyUp
+    }
+}
+
 /// Tracks keyboard events during screen recording
-/// Used to detect typing activity and trigger zoom-out
+/// Used to detect typing activity for Auto Zoom zoom-out trigger
 @MainActor
 final class KeyboardEventTracker {
     
@@ -17,47 +29,17 @@ final class KeyboardEventTracker {
     
     // MARK: - Computed Properties
     
-    /// Check if there was keyboard activity at a specific time
-    func hasActivityAt(time: TimeInterval) -> Bool {
-        // Check if any keyboard event occurred within the activity window
-        events.contains { event in
-            let windowStart = event.timestamp
-            let windowEnd = event.timestamp + KeyboardEvent.activityWindowDuration
-            return time >= windowStart && time <= windowEnd
-        }
+    /// Last keyboard event timestamp
+    var lastEventTime: TimeInterval? {
+        events.last?.timestamp
     }
     
-    /// Get keyboard activity ranges (periods where typing was active)
-    var activityRanges: [ClosedRange<TimeInterval>] {
-        guard !events.isEmpty else { return [] }
-        
-        var ranges: [ClosedRange<TimeInterval>] = []
-        var rangeStart: TimeInterval?
-        var rangeEnd: TimeInterval = 0
-        
-        for event in events.sorted(by: { $0.timestamp < $1.timestamp }) {
-            if rangeStart == nil {
-                rangeStart = event.timestamp
-                rangeEnd = event.timestamp + KeyboardEvent.activityWindowDuration
-            } else if event.timestamp <= rangeEnd + 0.1 {
-                // Extend current range
-                rangeEnd = event.timestamp + KeyboardEvent.activityWindowDuration
-            } else {
-                // Start new range
-                if let start = rangeStart {
-                    ranges.append(start...rangeEnd)
-                }
-                rangeStart = event.timestamp
-                rangeEnd = event.timestamp + KeyboardEvent.activityWindowDuration
-            }
+    /// Check if there was keyboard activity within a time window
+    func hasRecentActivity(within seconds: TimeInterval, at time: TimeInterval) -> Bool {
+        events.contains { event in
+            let timeDiff = time - event.timestamp
+            return timeDiff >= 0 && timeDiff < seconds
         }
-        
-        // Add last range
-        if let start = rangeStart {
-            ranges.append(start...rangeEnd)
-        }
-        
-        return ranges
     }
     
     // MARK: - Tracking Control
@@ -70,9 +52,7 @@ final class KeyboardEventTracker {
         events.removeAll()
         
         print("[KeyboardTracker] Starting tracking...")
-        
         setupEventMonitors()
-        
         print("[KeyboardTracker] Tracking started")
     }
     
@@ -88,26 +68,19 @@ final class KeyboardEventTracker {
         startTime = nil
     }
     
-    // MARK: - Event Recording
-    
-    func recordEvent(_ event: KeyboardEvent) {
-        guard isTracking else { return }
-        events.append(event)
-    }
-    
     // MARK: - Event Monitor Setup
     
     private func setupEventMonitors() {
-        let keyMask: NSEvent.EventTypeMask = [.keyDown]
+        let keyMask: NSEvent.EventTypeMask = [.keyDown, .keyUp]
         
-        // Global monitor for key events
+        // Global monitor for keyboard events
         globalMonitor = NSEvent.addGlobalMonitorForEvents(matching: keyMask) { [weak self] event in
             Task { @MainActor in
                 self?.handleNSEvent(event)
             }
         }
         
-        // Local monitor for key events (when app is focused)
+        // Local monitor for keyboard events (when app is focused)
         localMonitor = NSEvent.addLocalMonitorForEvents(matching: keyMask) { [weak self] event in
             Task { @MainActor in
                 self?.handleNSEvent(event)
@@ -127,11 +100,27 @@ final class KeyboardEventTracker {
         
         let timestamp = Date().timeIntervalSince(startTime)
         
+        let eventType: KeyboardEvent.KeyboardEventType
+        switch event.type {
+        case .keyDown:
+            eventType = .keyDown
+        case .keyUp:
+            eventType = .keyUp
+        default:
+            return
+        }
+        
         let keyboardEvent = KeyboardEvent(
+            type: eventType,
             timestamp: timestamp,
-            type: .keyDown
+            keyCode: event.keyCode
         )
-        recordEvent(keyboardEvent)
+        
+        events.append(keyboardEvent)
+        
+        if eventType == .keyDown {
+            print("[KeyboardTracker] Key down at \(timestamp)")
+        }
     }
     
     private func teardownEventMonitors() {

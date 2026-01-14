@@ -41,10 +41,10 @@ final class ContinuousZoomAnalyzer {
         settings: AutoZoomSettings
     ) -> ContinuousZoomTimeline {
         guard settings.isEnabled else {
-            return ContinuousZoomTimeline(keyframes: [], duration: session.duration)
+            return ContinuousZoomTimeline(keyframes: [.idle(at: 0)])
         }
         guard !session.events.isEmpty else {
-            return ContinuousZoomTimeline(keyframes: [], duration: session.duration)
+            return ContinuousZoomTimeline(keyframes: [.idle(at: 0)])
         }
         
         // Reset state
@@ -87,7 +87,8 @@ final class ContinuousZoomAnalyzer {
             let keyframe = ZoomKeyframe(
                 time: time,
                 scale: output.scale,
-                center: output.center
+                center: output.center,
+                easing: settings.easing
             )
             
             if shouldAddKeyframe(keyframe, lastKeyframe: lastKeyframe, isTransitioning: output.isTransitioning) {
@@ -103,11 +104,12 @@ final class ContinuousZoomAnalyzer {
             keyframes.append(ZoomKeyframe(
                 time: session.duration,
                 scale: 1.0,
-                center: last.center
+                center: last.center,
+                easing: settings.easing
             ))
         }
         
-        return ContinuousZoomTimeline(keyframes: keyframes, duration: session.duration)
+        return ContinuousZoomTimeline(keyframes: keyframes)
     }
     
     // MARK: - Event Detection
@@ -252,75 +254,5 @@ final class ContinuousZoomAnalyzer {
 
 // MARK: - Supporting Types
 
-/// A keyframe in the continuous zoom timeline
-struct ZoomKeyframe: Equatable {
-    let time: TimeInterval
-    let scale: CGFloat
-    let center: CGPoint
-    
-    static func interpolate(from: ZoomKeyframe, to: ZoomKeyframe, at time: TimeInterval, easing: EasingCurve) -> ZoomKeyframe {
-        let duration = to.time - from.time
-        guard duration > 0 else { return from }
-        
-        let rawProgress = (time - from.time) / duration
-        let progress = easing.value(at: rawProgress)
-        
-        return ZoomKeyframe(
-            time: time,
-            scale: from.scale + CGFloat(progress) * (to.scale - from.scale),
-            center: CGPoint(
-                x: from.center.x + CGFloat(progress) * (to.center.x - from.center.x),
-                y: from.center.y + CGFloat(progress) * (to.center.y - from.center.y)
-            )
-        )
-    }
-}
-
-/// Continuous zoom timeline with keyframes
-struct ContinuousZoomTimeline {
-    let keyframes: [ZoomKeyframe]
-    let duration: TimeInterval
-    
-    /// Get zoom state at a specific time
-    func stateAt(time: TimeInterval, easing: EasingCurve = .easeInOut) -> (scale: CGFloat, center: CGPoint) {
-        guard !keyframes.isEmpty else {
-            return (scale: 1.0, center: CGPoint(x: 0.5, y: 0.5))
-        }
-        
-        // Before first keyframe
-        if time <= keyframes.first!.time {
-            let kf = keyframes.first!
-            return (scale: kf.scale, center: kf.center)
-        }
-        
-        // After last keyframe
-        if time >= keyframes.last!.time {
-            let kf = keyframes.last!
-            return (scale: kf.scale, center: kf.center)
-        }
-        
-        // Find surrounding keyframes
-        var beforeIndex = 0
-        for (index, keyframe) in keyframes.enumerated() {
-            if keyframe.time <= time {
-                beforeIndex = index
-            } else {
-                break
-            }
-        }
-        
-        let afterIndex = min(beforeIndex + 1, keyframes.count - 1)
-        let before = keyframes[beforeIndex]
-        let after = keyframes[afterIndex]
-        
-        // Interpolate
-        let interpolated = ZoomKeyframe.interpolate(from: before, to: after, at: time, easing: easing)
-        return (scale: interpolated.scale, center: interpolated.center)
-    }
-    
-    /// Check if any zoom is active at the given time
-    func isZoomActive(at time: TimeInterval) -> Bool {
-        let state = stateAt(time: time)
-        return state.scale > 1.01
-    }
-}
+// Note: ZoomKeyframe and ContinuousZoomTimeline are defined in
+// Domain/Models/ZoomKeyframe.swift and Domain/Models/ContinuousZoomTimeline.swift

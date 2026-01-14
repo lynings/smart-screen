@@ -10,28 +10,43 @@ struct ExportView: View {
     @State private var showingError = false
     
     var body: some View {
-        VStack(spacing: 24) {
+        VStack(spacing: 0) {
             headerSection
+                .padding(.horizontal, 32)
+                .padding(.top, 32)
+                .padding(.bottom, 24)
             
             if let exportedURL = viewModel.exportedURL {
                 successSection(url: exportedURL)
+                    .padding(.horizontal, 32)
+                    .padding(.bottom, 32)
             } else if viewModel.isExporting {
                 exportingSection
+                    .padding(.horizontal, 32)
+                    .padding(.bottom, 32)
             } else {
-                presetSelectionSection
-                
-                // Show cursor enhancement only if we have cursor data
-                if viewModel.hasCursorData(session: session) {
-                    cursorEnhancementSection
+                ScrollView {
+                    VStack(spacing: 24) {
+                        presetSelectionSection
+                        
+                        // Show cursor enhancement only if we have cursor data
+                        if viewModel.hasCursorData(session: session) {
+                            cursorEnhancementSection
+                        }
+                        
+                        // Always show Auto Zoom section
+                        autoZoomSection
+                    }
+                    .padding(.horizontal, 32)
                 }
-                
-                // Always show Auto Zoom section
-                autoZoomSection
+                .frame(maxHeight: 500)
                 
                 exportButton
+                    .padding(.horizontal, 32)
+                    .padding(.top, 16)
+                    .padding(.bottom, 32)
             }
         }
-        .padding(32)
         .frame(width: 420)
         .background(.ultraThinMaterial)
         .clipShape(RoundedRectangle(cornerRadius: 16))
@@ -254,57 +269,95 @@ struct ExportView: View {
             }
             
             // Zoom Level
-            HStack {
-                Text("Zoom")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            VStack(spacing: 4) {
+                HStack {
+                    Text("缩放级别")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    
+                    Spacer()
+                    
+                    Text(String(format: "%.1fx", viewModel.autoZoomLevel))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
                 
-                Spacer()
-                
-                Text(String(format: "%.1fx", viewModel.autoZoomLevel))
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
+                Slider(
+                    value: $viewModel.autoZoomLevel,
+                    in: AutoZoomSettings.zoomLevelRange,
+                    step: 0.1
+                )
+                .tint(.blue)
             }
             
-            Slider(
-                value: $viewModel.autoZoomLevel,
-                in: AutoZoomSettings.zoomLevelRange,
-                step: 0.1
-            )
-            .tint(.blue)
+            // Idle Timeout (Auto Zoom 2.0)
+            VStack(spacing: 4) {
+                HStack {
+                    Text("光标静止超时")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    
+                    Spacer()
+                    
+                    Text(String(format: "%.1f秒", viewModel.autoZoomIdleTimeout))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                
+                Slider(
+                    value: $viewModel.autoZoomIdleTimeout,
+                    in: AutoZoomSettings.idleTimeoutRange,
+                    step: 0.5
+                )
+                .tint(.blue)
+            }
             
-            // Follow Cursor toggle (AC-FU-01, AC-FU-02)
+            // Auto Zoom 2.0 toggles
             HStack {
-                Text("Follow Cursor")
+                Text("动态缩放（边缘更大）")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 
                 Spacer()
                 
-                Toggle("", isOn: $viewModel.autoZoomFollowCursor)
+                Toggle("", isOn: $viewModel.autoZoomDynamicScale)
                     .toggleStyle(.switch)
                     .labelsHidden()
             }
             
-            // Cursor/Highlight Scale (AC-CE-01)
             HStack {
-                Text("Highlight Scale")
+                Text("键盘输入时缩小")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                 
                 Spacer()
                 
-                Text(String(format: "%.1fx", viewModel.autoZoomCursorScale))
-                    .font(.caption.monospacedDigit())
-                    .foregroundStyle(.secondary)
+                Toggle("", isOn: $viewModel.autoZoomOutOnKeyboard)
+                    .toggleStyle(.switch)
+                    .labelsHidden()
             }
             
-            Slider(
-                value: $viewModel.autoZoomCursorScale,
-                in: AutoZoomSettings.cursorScaleRange,
-                step: 0.1
-            )
-            .tint(.blue)
+            // Cursor/Highlight Scale
+            VStack(spacing: 4) {
+                HStack {
+                    Text("点击高亮缩放")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                    
+                    Spacer()
+                    
+                    Text(String(format: "%.1fx", viewModel.autoZoomCursorScale))
+                        .font(.caption.monospacedDigit())
+                        .foregroundStyle(.secondary)
+                }
+                
+                Slider(
+                    value: $viewModel.autoZoomCursorScale,
+                    in: AutoZoomSettings.cursorScaleRange,
+                    step: 0.1
+                )
+                .tint(.blue)
+            }
             
             // Info text with click count
             let clickCount = session.cursorTrackSession?.clickEvents.count ?? 0
@@ -313,14 +366,19 @@ struct ExportView: View {
                     .font(.caption2)
                     .foregroundStyle(clickCount > 0 ? .green : .secondary)
                 if clickCount > 0 {
-                    Text("\(clickCount) clicks detected")
+                    Text("\(clickCount) 个点击已检测")
                         .font(.caption2)
                 } else {
-                    Text("No clicks detected - need Accessibility permission")
+                    Text("未检测到点击 - 需要辅助功能权限")
                         .font(.caption2)
                 }
             }
             .foregroundStyle(.secondary)
+            
+            // Feature summary
+            Text("2.0 新功能：平滑过渡、动态缩放、跟随光标、3秒超时")
+                .font(.caption2)
+                .foregroundStyle(.tertiary)
         }
         .padding(12)
         .background(Color.primary.opacity(0.03))

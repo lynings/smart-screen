@@ -39,10 +39,10 @@ final class ZoomSegmentGenerator {
         static let `default` = Config(
             defaultDuration: 1.2,
             defaultZoomScale: 2.0,
-            clickMergeTime: 0.5,           // Increased from 0.3s for better debouncing
-            clickMergeDistancePixels: 150,  // Increased from 100px for smoother experience
-            segmentMergeGap: 0.5,           // Increased from 0.3s to merge more segments
-            segmentMergeDistance: 0.08,     // Increased from 0.05 for more merging
+            clickMergeTime: 0.3,
+            clickMergeDistancePixels: 100,
+            segmentMergeGap: 0.3,
+            segmentMergeDistance: 0.05,
             minZoomScale: 1.0,
             maxZoomScale: 6.0,
             easing: .easeInOut

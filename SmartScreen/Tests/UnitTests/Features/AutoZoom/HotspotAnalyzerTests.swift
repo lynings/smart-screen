@@ -47,7 +47,7 @@ final class HotspotAnalyzerTests: XCTestCase {
             ],
             duration: 10.0
         )
-        let settings = AutoZoomSettings(zoomLevel: 2.0, duration: 1.2)
+        let settings = AutoZoomSettings(zoomLevel: 2.0)
         
         // when
         let segments = analyzer.analyze(session: session, settings: settings)
@@ -69,7 +69,7 @@ final class HotspotAnalyzerTests: XCTestCase {
             ],
             duration: 10.0
         )
-        let settings = AutoZoomSettings(duration: 1.2)
+        let settings = AutoZoomSettings()
         
         // when
         let segments = analyzer.analyze(session: session, settings: settings)
@@ -94,7 +94,7 @@ final class HotspotAnalyzerTests: XCTestCase {
             ],
             duration: 10.0
         )
-        let settings = AutoZoomSettings(duration: 1.2)
+        let settings = AutoZoomSettings()
         
         // when
         let segments = analyzer.analyze(session: session, settings: settings)
@@ -117,7 +117,7 @@ final class HotspotAnalyzerTests: XCTestCase {
             ],
             duration: 10.0
         )
-        let settings = AutoZoomSettings(duration: 1.2)
+        let settings = AutoZoomSettings()
         
         // when
         let segments = analyzer.analyze(session: session, settings: settings)
@@ -160,7 +160,7 @@ final class HotspotAnalyzerTests: XCTestCase {
             ],
             duration: 15.0
         )
-        let settings = AutoZoomSettings(duration: 1.2)
+        let settings = AutoZoomSettings()
         
         // when
         let segments = analyzer.analyze(session: session, settings: settings)
@@ -180,7 +180,7 @@ final class HotspotAnalyzerTests: XCTestCase {
             ],
             duration: 10.0
         )
-        let settings = AutoZoomSettings(duration: 3.0)  // Would extend past video end
+        let settings = AutoZoomSettings()  // Default settings
         
         // when
         let segments = analyzer.analyze(session: session, settings: settings)

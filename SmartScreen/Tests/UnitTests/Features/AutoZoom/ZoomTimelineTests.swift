@@ -133,8 +133,8 @@ final class ZoomTimelineTests: XCTestCase {
         )
         let timeline = ZoomTimeline(segments: [segment], duration: 5.0)
         
-        // when - at 0.09s (middle of 15% zoom in phase = 0.18s)
-        let state = timeline.state(at: 0.09)
+        // when - at 0.15s (middle of 25% zoom in phase)
+        let state = timeline.state(at: 0.15)
         
         // then
         XCTAssertEqual(state.phase, .zoomIn)
@@ -149,7 +149,7 @@ final class ZoomTimelineTests: XCTestCase {
         )
         let timeline = ZoomTimeline(segments: [segment], duration: 5.0)
         
-        // when - at 0.6s (middle of 70% hold phase)
+        // when - at 0.6s (middle of 50% hold phase)
         let state = timeline.state(at: 0.6)
         
         // then
@@ -165,8 +165,8 @@ final class ZoomTimelineTests: XCTestCase {
         )
         let timeline = ZoomTimeline(segments: [segment], duration: 5.0)
         
-        // when - at 1.11s (middle of 15% zoom out phase, starts at 1.02s)
-        let state = timeline.state(at: 1.11)
+        // when - at 1.05s (middle of 25% zoom out phase)
+        let state = timeline.state(at: 1.05)
         
         // then
         XCTAssertEqual(state.phase, .zoomOut)
@@ -202,134 +202,5 @@ final class ZoomTimelineTests: XCTestCase {
         XCTAssertFalse(timeline.isZoomActive(at: 1.0))
         XCTAssertTrue(timeline.isZoomActive(at: 2.5))
         XCTAssertFalse(timeline.isZoomActive(at: 5.0))
-    }
-    
-    // MARK: - Gap Transition (方案 A: 平滑过渡)
-    
-    func test_should_maintain_zoom_during_short_gap_between_segments() {
-        // given - two segments with short gap
-        let segment1 = AutoZoomSegment(
-            timeRange: 1.0...2.0,
-            focusCenter: CGPoint(x: 0.3, y: 0.5),
-            zoomScale: 2.0
-        )
-        let segment2 = AutoZoomSegment(
-            timeRange: 2.3...3.3,
-            focusCenter: CGPoint(x: 0.7, y: 0.5),
-            zoomScale: 2.0
-        )
-        let timeline = ZoomTimeline(
-            segments: [segment1, segment2],
-            duration: 10.0,
-            transitionDuration: 0.5
-        )
-        
-        // when - in the gap between segments
-        let state = timeline.state(at: 2.15)
-        
-        // then - should maintain zoom (gap transition) instead of idle
-        XCTAssertTrue(state.isActive)
-        XCTAssertEqual(state.scale, 2.0, accuracy: 0.01)
-    }
-    
-    func test_should_interpolate_center_during_gap_transition() {
-        // given - two segments with short gap and different centers
-        let segment1 = AutoZoomSegment(
-            timeRange: 1.0...2.0,
-            focusCenter: CGPoint(x: 0.3, y: 0.5),
-            zoomScale: 2.0
-        )
-        let segment2 = AutoZoomSegment(
-            timeRange: 2.2...3.2,
-            focusCenter: CGPoint(x: 0.7, y: 0.5),
-            zoomScale: 2.0
-        )
-        let timeline = ZoomTimeline(
-            segments: [segment1, segment2],
-            duration: 10.0,
-            transitionDuration: 0.4
-        )
-        
-        // when - in the middle of gap
-        let state = timeline.state(at: 2.1)
-        
-        // then - center should be interpolated between 0.3 and 0.7
-        XCTAssertTrue(state.isActive)
-        XCTAssertGreaterThan(state.center.x, 0.3)
-        XCTAssertLessThan(state.center.x, 0.7)
-    }
-    
-    func test_should_return_idle_for_long_gap_between_segments() {
-        // given - two segments with long gap
-        let segment1 = AutoZoomSegment(
-            timeRange: 1.0...2.0,
-            focusCenter: CGPoint(x: 0.3, y: 0.5),
-            zoomScale: 2.0
-        )
-        let segment2 = AutoZoomSegment(
-            timeRange: 5.0...6.0,
-            focusCenter: CGPoint(x: 0.7, y: 0.5),
-            zoomScale: 2.0
-        )
-        let timeline = ZoomTimeline(
-            segments: [segment1, segment2],
-            duration: 10.0,
-            transitionDuration: 0.3
-        )
-        
-        // when - in the gap (too long for transition)
-        let state = timeline.state(at: 3.5)
-        
-        // then - should be idle
-        XCTAssertFalse(state.isActive)
-        XCTAssertEqual(state.scale, 1.0)
-    }
-    
-    // MARK: - Keyboard Activity
-    
-    func test_should_return_idle_when_keyboard_is_active() {
-        // given
-        let segment = AutoZoomSegment(
-            timeRange: 1.0...3.0,
-            focusCenter: CGPoint(x: 0.5, y: 0.5),
-            zoomScale: 2.0
-        )
-        let timeline = ZoomTimeline(segments: [segment], duration: 10.0)
-        
-        // when - keyboard is active during segment
-        let state = timeline.state(
-            at: 2.0,
-            cursorPosition: CGPoint(x: 0.5, y: 0.5),
-            followCursor: false,
-            smoothing: 0.2,
-            hasKeyboardActivity: true
-        )
-        
-        // then - should force idle state (no zoom while typing)
-        XCTAssertEqual(state.scale, 1.0)
-        XCTAssertFalse(state.isActive)
-    }
-    
-    func test_should_zoom_normally_when_no_keyboard_activity() {
-        // given
-        let segment = AutoZoomSegment(
-            timeRange: 1.0...3.0,
-            focusCenter: CGPoint(x: 0.5, y: 0.5),
-            zoomScale: 2.0
-        )
-        let timeline = ZoomTimeline(segments: [segment], duration: 10.0)
-        
-        // when - no keyboard activity during segment
-        let state = timeline.state(
-            at: 2.0,
-            cursorPosition: CGPoint(x: 0.5, y: 0.5),
-            followCursor: false,
-            smoothing: 0.2,
-            hasKeyboardActivity: false
-        )
-        
-        // then - should zoom normally
-        XCTAssertGreaterThan(state.scale, 1.0)
-        XCTAssertTrue(state.isActive)
     }
 }

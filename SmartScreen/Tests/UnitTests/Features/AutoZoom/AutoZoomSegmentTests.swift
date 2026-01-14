@@ -96,13 +96,13 @@ final class AutoZoomSegmentTests: XCTestCase {
             zoomScale: 2.0
         )
         
-        // then - 15% zoom in, 70% hold, 15% zoom out (optimized for less frequent zooming)
-        XCTAssertEqual(segment.zoomInDuration, 0.18, accuracy: 0.001)  // 1.2 * 0.15
-        XCTAssertEqual(segment.holdDuration, 0.84, accuracy: 0.001)   // 1.2 * 0.70
-        XCTAssertEqual(segment.zoomOutDuration, 0.18, accuracy: 0.001) // 1.2 * 0.15
+        // then - 25% zoom in, 50% hold, 25% zoom out
+        XCTAssertEqual(segment.zoomInDuration, 0.3, accuracy: 0.001)
+        XCTAssertEqual(segment.holdDuration, 0.6, accuracy: 0.001)
+        XCTAssertEqual(segment.zoomOutDuration, 0.3, accuracy: 0.001)
     }
     
-    func test_should_return_zoom_in_state_during_first_phase() {
+    func test_should_return_zoom_in_state_during_first_quarter() {
         // given
         let segment = AutoZoomSegment(
             timeRange: 0...1.2,
@@ -111,8 +111,8 @@ final class AutoZoomSegmentTests: XCTestCase {
             easing: .linear
         )
         
-        // when - at 0.09s (middle of 15% zoom in phase = 0.18s)
-        let state = segment.state(at: 0.09)
+        // when - at 0.15s (middle of zoom in phase)
+        let state = segment.state(at: 0.15)
         
         // then
         XCTAssertNotNil(state)
@@ -120,7 +120,7 @@ final class AutoZoomSegmentTests: XCTestCase {
         XCTAssertEqual(Double(state?.scale ?? 0), 1.5, accuracy: 0.01) // Halfway between 1.0 and 2.0
     }
     
-    func test_should_return_hold_state_during_middle_phase() {
+    func test_should_return_hold_state_during_middle_half() {
         // given
         let segment = AutoZoomSegment(
             timeRange: 0...1.2,
@@ -128,7 +128,7 @@ final class AutoZoomSegmentTests: XCTestCase {
             zoomScale: 2.0
         )
         
-        // when - at 0.6s (middle of 70% hold phase)
+        // when - at 0.6s (middle of hold phase)
         let state = segment.state(at: 0.6)
         
         // then
@@ -137,7 +137,7 @@ final class AutoZoomSegmentTests: XCTestCase {
         XCTAssertEqual(Double(state?.scale ?? 0), 2.0, accuracy: 0.01)
     }
     
-    func test_should_return_zoom_out_state_during_last_phase() {
+    func test_should_return_zoom_out_state_during_last_quarter() {
         // given
         let segment = AutoZoomSegment(
             timeRange: 0...1.2,
@@ -146,8 +146,8 @@ final class AutoZoomSegmentTests: XCTestCase {
             easing: .linear
         )
         
-        // when - at 1.11s (middle of 15% zoom out phase, which starts at 1.02s)
-        let state = segment.state(at: 1.11)
+        // when - at 1.05s (middle of zoom out phase)
+        let state = segment.state(at: 1.05)
         
         // then
         XCTAssertNotNil(state)

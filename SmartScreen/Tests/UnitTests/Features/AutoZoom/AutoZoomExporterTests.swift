@@ -16,14 +16,14 @@ final class AutoZoomExporterTests: XCTestCase {
     
     func test_should_create_exporter_with_custom_settings() async {
         // given
-        let settings = AutoZoomSettings(zoomLevel: 2.5, duration: 0.7)
+        let settings = AutoZoomSettings(zoomLevel: 2.5, idleTimeout: 4.0)
         
         // when
         let exporter = AutoZoomExporter(settings: settings)
         
         // then
         XCTAssertEqual(exporter.settings.zoomLevel, 2.5)
-        XCTAssertEqual(exporter.settings.duration, 0.7)
+        XCTAssertEqual(exporter.settings.idleTimeout, 4.0)
     }
     
     // MARK: - Export State
@@ -58,7 +58,7 @@ final class AutoZoomExporterTests: XCTestCase {
             ],
             duration: 10.0
         )
-        let settings = AutoZoomSettings(duration: 1.2)
+        let settings = AutoZoomSettings()
         
         // when
         let segments = exporter.analyzeSession(session, settings: settings)

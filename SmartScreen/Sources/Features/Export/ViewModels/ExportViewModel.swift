@@ -25,22 +25,26 @@ final class ExportViewModel {
     var smoothingLevel: SmoothingLevel = .medium
     var highlightEnabled = true
     
-    // MARK: - Auto Zoom Options
+    // MARK: - Auto Zoom Options (Auto Zoom 2.0)
     
     var autoZoomEnabled = true
     var autoZoomLevel: CGFloat = 2.0
-    var autoZoomDuration: TimeInterval = 1.2
     var autoZoomEasing: EasingCurve = .easeInOut
-    var autoZoomFollowCursor = true  // AC-FU-01, AC-FU-02
-    var autoZoomCursorScale: CGFloat = 1.6  // AC-CE-01: Cursor/highlight scale during zoom
+    var autoZoomCursorScale: CGFloat = 1.6
+    
+    // Auto Zoom 2.0: New continuous zoom settings
+    var autoZoomIdleTimeout: TimeInterval = 3.0
+    var autoZoomDynamicScale = true
+    var autoZoomOutOnKeyboard = true
     
     var autoZoomSettings: AutoZoomSettings {
         AutoZoomSettings(
             isEnabled: autoZoomEnabled,
             zoomLevel: autoZoomLevel,
-            duration: autoZoomDuration,
             easing: autoZoomEasing,
-            followCursor: autoZoomFollowCursor,
+            idleTimeout: autoZoomIdleTimeout,
+            dynamicZoomEnabled: autoZoomDynamicScale,
+            zoomOutOnKeyboard: autoZoomOutOnKeyboard,
             cursorScale: autoZoomCursorScale
         )
     }
@@ -50,15 +54,15 @@ final class ExportViewModel {
         case .subtle:
             let settings = AutoZoomSettings.subtle
             autoZoomLevel = settings.zoomLevel
-            autoZoomDuration = settings.duration
+            autoZoomIdleTimeout = settings.idleTimeout
         case .normal:
             let settings = AutoZoomSettings.normal
             autoZoomLevel = settings.zoomLevel
-            autoZoomDuration = settings.duration
+            autoZoomIdleTimeout = settings.idleTimeout
         case .dramatic:
             let settings = AutoZoomSettings.dramatic
             autoZoomLevel = settings.zoomLevel
-            autoZoomDuration = settings.duration
+            autoZoomIdleTimeout = settings.idleTimeout
         }
     }
     

@@ -10,6 +10,7 @@ struct CursorExportSettings {
 }
 
 /// Exports video with combined cursor enhancement and auto-zoom effects
+/// Auto Zoom 2.0: Uses continuous zoom timeline with smooth transitions
 actor CombinedEffectsExporter {
     
     // MARK: - Properties
@@ -40,10 +41,29 @@ actor CombinedEffectsExporter {
     
     // MARK: - Export
     
-    /// Export video with combined effects
+    /// Export video with combined effects (legacy interface)
     func export(
         videoURL: URL,
         cursorSession: CursorTrackSession,
+        to outputURL: URL,
+        progressHandler: ((Double) -> Void)? = nil
+    ) async throws {
+        // Call new interface with empty keyboard events
+        try await export(
+            videoURL: videoURL,
+            cursorSession: cursorSession,
+            keyboardEvents: [],
+            to: outputURL,
+            progressHandler: progressHandler
+        )
+    }
+    
+    /// Export video with combined effects including keyboard events
+    /// Auto Zoom 2.0: Supports keyboard-triggered zoom out
+    func export(
+        videoURL: URL,
+        cursorSession: CursorTrackSession,
+        keyboardEvents: [KeyboardEvent],
         to outputURL: URL,
         progressHandler: ((Double) -> Void)? = nil
     ) async throws {
@@ -67,9 +87,12 @@ actor CombinedEffectsExporter {
         
         print("[CombinedExporter] Video size: \(videoSize), duration: \(duration.seconds)s")
         
-        // 2. Generate zoom timeline from click events (AC-based approach)
-        let zoomTimeline = createZoomTimeline(from: cursorSession, screenSize: videoSize)
-        print("[CombinedExporter] Generated \(zoomTimeline.segmentCount) zoom segments")
+        // 2. Generate continuous zoom timeline (Auto Zoom 2.0)
+        let zoomTimeline = createContinuousZoomTimeline(
+            from: cursorSession,
+            keyboardEvents: keyboardEvents
+        )
+        print("[CombinedExporter] Generated continuous zoom timeline with \(zoomTimeline.count) keyframes")
         
         // 3. Setup reader
         let reader = try AVAssetReader(asset: asset)
@@ -126,20 +149,9 @@ actor CombinedEffectsExporter {
                 let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
                 let timeSeconds = presentationTime.seconds
                 
-                // Get cursor position for follow mode (AC-FU-02)
-                let cursorPosition = cursorSession.positionAt(time: timeSeconds)
-                
-                // Check if keyboard is active (typing triggers zoom-out)
-                let hasKeyboardActivity = cursorSession.hasKeyboardActivityAt(time: timeSeconds)
-                
-                // Get zoom state with follow mode and keyboard activity support
-                let zoomState = zoomTimeline.state(
-                    at: timeSeconds,
-                    cursorPosition: cursorPosition,
-                    followCursor: autoZoomSettings.followCursor,
-                    smoothing: autoZoomSettings.cursorSmoothing,
-                    hasKeyboardActivity: hasKeyboardActivity
-                )
+                // Get zoom state from continuous timeline (Auto Zoom 2.0)
+                // Timeline already incorporates cursor following, dynamic scale, and transitions
+                let zoomState = zoomTimeline.state(at: timeSeconds)
                 let currentScale = zoomState.scale
                 let currentCenter = zoomState.center
                 
@@ -322,37 +334,29 @@ actor CombinedEffectsExporter {
     
     // MARK: - Zoom Timeline Creation
     
-    /// Create zoom timeline from cursor session using AC-based approach
-    /// AC-TR-01: Only clicks trigger zoom
-    /// AC-TR-02: No clicks = no zoom
-    /// AC-TR-03: Nearby clicks are merged
-    private nonisolated func createZoomTimeline(
+    /// Create continuous zoom timeline (Auto Zoom 2.0)
+    /// Features:
+    /// - Dynamic zoom scale based on screen position
+    /// - Smooth transitions between zoom points
+    /// - Cursor following with 3s idle timeout
+    /// - Large distance handling (zoom out -> pan -> zoom in)
+    /// - Debounce for frequent clicks in small area
+    /// - Keyboard activity triggers zoom out
+    private nonisolated func createContinuousZoomTimeline(
         from session: CursorTrackSession,
-        screenSize: CGSize
-    ) -> ZoomTimeline {
+        keyboardEvents: [KeyboardEvent]
+    ) -> ContinuousZoomTimeline {
         guard autoZoomSettings.isEnabled else {
-            return ZoomTimeline.empty(duration: session.duration)
+            return ContinuousZoomTimeline(keyframes: [.idle(at: 0)])
         }
         
-        // Create generator config from settings with optimized debouncing
-        let generatorConfig = ZoomSegmentGenerator.Config(
-            defaultDuration: autoZoomSettings.holdTime + autoZoomSettings.duration * 2,
-            defaultZoomScale: autoZoomSettings.zoomLevel,
-            clickMergeTime: 0.5,            // Optimized for debouncing rapid clicks
-            clickMergeDistancePixels: 150,   // Increased for smoother experience
-            segmentMergeGap: 0.5,            // Merge segments with short gaps
-            segmentMergeDistance: 0.08,      // Increased for more merging
-            minZoomScale: 1.0,
-            maxZoomScale: 6.0,
-            easing: autoZoomSettings.easing
-        )
+        // Convert settings to continuous zoom config
+        let config = autoZoomSettings.toContinuousZoomConfig()
         
-        // Transition duration matches segment merge gap for seamless transitions
-        return ZoomTimeline.from(
-            session: session,
-            screenSize: screenSize,
-            config: generatorConfig,
-            transitionDuration: 0.4
+        return ContinuousZoomTimeline.from(
+            cursorSession: session,
+            keyboardEvents: keyboardEvents,
+            config: config
         )
     }
 }

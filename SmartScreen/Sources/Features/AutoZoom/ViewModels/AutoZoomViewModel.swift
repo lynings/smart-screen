@@ -2,17 +2,28 @@ import Foundation
 import Observation
 
 /// ViewModel for Auto Zoom settings and state management
+/// Auto Zoom 2.0: Continuous zoom with dynamic scale and smooth transitions
 @Observable
 @MainActor
 final class AutoZoomViewModel {
     
-    // MARK: - Settings
+    // MARK: - Core Settings
     
     var isEnabled: Bool = true
     var zoomLevel: CGFloat = 2.0
-    var duration: TimeInterval = 1.2
     var easing: EasingCurve = .easeInOut
-    var followCursor: Bool = true  // AC-FU-01, AC-FU-02
+    var cursorScale: CGFloat = 1.6
+    
+    // MARK: - Auto Zoom 2.0 Settings
+    
+    /// Idle timeout before auto zoom-out (seconds)
+    var idleTimeout: TimeInterval = 3.0
+    
+    /// Enable dynamic zoom scale (larger at edges/corners, smaller at center)
+    var dynamicZoomEnabled: Bool = true
+    
+    /// Zoom out when keyboard activity detected
+    var zoomOutOnKeyboard: Bool = true
     
     // MARK: - Computed
     
@@ -20,9 +31,11 @@ final class AutoZoomViewModel {
         AutoZoomSettings(
             isEnabled: isEnabled,
             zoomLevel: zoomLevel,
-            duration: duration,
             easing: easing,
-            followCursor: followCursor
+            idleTimeout: idleTimeout,
+            dynamicZoomEnabled: dynamicZoomEnabled,
+            zoomOutOnKeyboard: zoomOutOnKeyboard,
+            cursorScale: cursorScale
         )
     }
     
@@ -41,7 +54,7 @@ final class AutoZoomViewModel {
     
     private func applySettings(_ settings: AutoZoomSettings) {
         zoomLevel = settings.zoomLevel
-        duration = settings.duration
+        idleTimeout = settings.idleTimeout
         easing = settings.easing
     }
     
@@ -53,5 +66,13 @@ final class AutoZoomViewModel {
         case dramatic = "Dramatic"
         
         var id: String { rawValue }
+        
+        var description: String {
+            switch self {
+            case .subtle: return "轻柔 - 1.5x 缩放，4秒超时"
+            case .normal: return "标准 - 2.0x 缩放，3秒超时"
+            case .dramatic: return "强烈 - 2.5x 缩放，2.5秒超时"
+            }
+        }
     }
 }

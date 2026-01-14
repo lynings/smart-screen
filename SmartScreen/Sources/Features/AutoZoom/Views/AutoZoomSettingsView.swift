@@ -1,6 +1,6 @@
 import SwiftUI
 
-/// Settings view for Auto Zoom configuration
+/// Settings view for Auto Zoom 2.0 configuration
 struct AutoZoomSettingsView: View {
     @Bindable var viewModel: AutoZoomViewModel
     
@@ -12,7 +12,7 @@ struct AutoZoomSettingsView: View {
                     .font(.title2)
                     .foregroundStyle(.blue)
                 
-                Text("Auto Zoom")
+                Text("Auto Zoom 2.0")
                     .font(.headline)
                 
                 Spacer()
@@ -27,7 +27,7 @@ struct AutoZoomSettingsView: View {
                 
                 // Presets
                 VStack(alignment: .leading, spacing: 8) {
-                    Text("Presets")
+                    Text("预设")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                     
@@ -53,7 +53,7 @@ struct AutoZoomSettingsView: View {
                 // Zoom Level
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
-                        Text("Zoom Level")
+                        Text("缩放级别")
                             .font(.subheadline)
                         Spacer()
                         Text(String(format: "%.1fx", viewModel.zoomLevel))
@@ -69,31 +69,43 @@ struct AutoZoomSettingsView: View {
                     .tint(.blue)
                 }
                 
-                // Duration (total segment duration)
+                // Idle Timeout
                 VStack(alignment: .leading, spacing: 4) {
                     HStack {
-                        Text("Segment Duration")
+                        Text("光标静止超时")
                             .font(.subheadline)
                         Spacer()
-                        Text(String(format: "%.1fs", viewModel.duration))
+                        Text(String(format: "%.1f秒", viewModel.idleTimeout))
                             .font(.subheadline.monospacedDigit())
                             .foregroundStyle(.secondary)
                     }
                     
                     Slider(
-                        value: $viewModel.duration,
-                        in: AutoZoomSettings.durationRange,
-                        step: 0.1
+                        value: $viewModel.idleTimeout,
+                        in: AutoZoomSettings.idleTimeoutRange,
+                        step: 0.5
                     )
                     .tint(.blue)
                     
-                    Text("25% zoom in • 50% hold • 25% zoom out")
+                    Text("光标静止超过此时间后自动缩小")
                         .font(.caption2)
                         .foregroundStyle(.tertiary)
                 }
                 
+                // Dynamic Zoom Toggle
+                Toggle(isOn: $viewModel.dynamicZoomEnabled) {
+                    Text("动态缩放（边缘更大）")
+                        .font(.subheadline)
+                }
+                
+                // Keyboard Zoom Out Toggle
+                Toggle(isOn: $viewModel.zoomOutOnKeyboard) {
+                    Text("键盘输入时缩小")
+                        .font(.subheadline)
+                }
+                
                 // Easing
-                Picker("Easing", selection: $viewModel.easing) {
+                Picker("缓动曲线", selection: $viewModel.easing) {
                     ForEach(EasingCurve.allCases, id: \.self) { curve in
                         Text(curve.displayName).tag(curve)
                     }
@@ -102,18 +114,18 @@ struct AutoZoomSettingsView: View {
             }
         }
         .padding()
-        .frame(width: 280)
+        .frame(width: 300)
     }
     
     private func presetBackground(for preset: AutoZoomViewModel.Preset) -> some ShapeStyle {
         let isSelected: Bool
         switch preset {
         case .subtle:
-            isSelected = viewModel.zoomLevel == 1.5 && viewModel.duration == 1.0
+            isSelected = viewModel.zoomLevel == 1.5 && viewModel.idleTimeout == 4.0
         case .normal:
-            isSelected = viewModel.zoomLevel == 2.0 && viewModel.duration == 1.2
+            isSelected = viewModel.zoomLevel == 2.0 && viewModel.idleTimeout == 3.0
         case .dramatic:
-            isSelected = viewModel.zoomLevel == 2.5 && viewModel.duration == 1.5
+            isSelected = viewModel.zoomLevel == 2.5 && viewModel.idleTimeout == 2.5
         }
         return isSelected ? AnyShapeStyle(.blue.opacity(0.2)) : AnyShapeStyle(.gray.opacity(0.1))
     }
