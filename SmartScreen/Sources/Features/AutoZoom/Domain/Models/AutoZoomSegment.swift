@@ -26,10 +26,11 @@ struct AutoZoomSegment: Equatable, Identifiable {
     
     // MARK: - Animation Phases
     
-    /// Phase durations (25% zoom in, 50% hold, 25% zoom out)
-    var zoomInDuration: TimeInterval { duration * 0.25 }
-    var holdDuration: TimeInterval { duration * 0.50 }
-    var zoomOutDuration: TimeInterval { duration * 0.25 }
+    /// Phase durations (15% zoom in, 70% hold, 15% zoom out)
+    /// Optimized to reduce frequent zoom transitions during rapid clicking
+    var zoomInDuration: TimeInterval { duration * 0.15 }
+    var holdDuration: TimeInterval { duration * 0.70 }
+    var zoomOutDuration: TimeInterval { duration * 0.15 }
     
     var zoomInEndTime: TimeInterval { startTime + zoomInDuration }
     var holdEndTime: TimeInterval { zoomInEndTime + holdDuration }

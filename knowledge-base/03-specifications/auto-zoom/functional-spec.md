@@ -2,7 +2,7 @@
 
 > **层级**: L3 - 规格定义（How）  
 > **优先级**: P2 - 体验增强  
-> **状态**: ✅ 已实现 (v4.0 - 防抖优化 + 键盘事件)  
+> **状态**: ✅ 已实现 (v3.2 - 平滑过渡 + 键盘检测)  
 > **关联**: [产品愿景](../../01-strategy-and-vision/product-vision.md)
 
 ## 功能概述
@@ -20,20 +20,21 @@
 ### 已实现范围 (Phase 1-4)
 - ✅ 点击触发缩放（AC-TR-01）
 - ✅ 无点击不创建 segment（AC-TR-02）
-- ✅ 快速点击合并（AC-TR-03：< 0.5s 且 < 200px，防抖优化）
+- ✅ 快速点击合并（AC-TR-03：< 0.5s 且 < 150px，优化防抖）
 - ✅ 以点击为中心（AC-FR-01）
 - ✅ 边界约束（AC-FR-02）
 - ✅ 缩放范围限制（AC-FR-03：1.0x - 6.0x）
-- ✅ 三阶段动画（AC-AN-01：25% 放大 + 50% 保持 + 25% 缩小）
+- ✅ 三阶段动画（AC-AN-01：15% 放大 + 70% 保持 + 15% 缩小，优化频繁操作）
 - ✅ 平滑缓动（AC-AN-02：ease-in-out）
-- ✅ 相邻 segment 合并（AC-AN-03：< 0.5s 间隔，防抖优化）
+- ✅ 相邻 segment 合并（AC-AN-03）
 - ✅ 预设支持（Subtle/Normal/Dramatic）
 - ✅ 与光标增强效果集成
 - ✅ 导出时应用效果
 - ✅ **跟随模式**（AC-FU-01, AC-FU-02：游标跟随缩放中心）
 - ✅ **跟随边界约束**（AC-FU-03）
 - ✅ **高亮缩放**（AC-CE-01：缩放时高亮效果放大）
-- ✅ **键盘事件触发 Zoom Out**（AC-KB-01：输入时自动缩小）
+- ✅ **Segment 间平滑过渡**（AC-TR-04：避免画面跳动）
+- ✅ **键盘活动检测**（AC-KB-01：打字时自动缩小到正常大小）
 
 ### 待实现范围 (后续迭代)
 - ⏳ 游标自动隐藏（cursorAutoHide）- 需要复杂的视频处理
@@ -81,9 +82,9 @@
 ### 架构组件
 
 ```
-CursorTrackSession (输入: 鼠标事件 + 键盘事件)
+CursorTrackSession (输入)
         ↓
-ZoomSegmentGenerator (点击分析 + 合并 + 键盘截断)
+ZoomSegmentGenerator (点击分析 + 合并)
         ↓
 ZoomTimeline [AutoZoomSegment] (时间线)
         ↓
@@ -103,10 +104,10 @@ struct AutoZoomSegment: Equatable, Identifiable {
     let zoomScale: CGFloat
     let easing: EasingCurve
     
-    // 三阶段动画 (25% + 50% + 25%)
-    var zoomInDuration: TimeInterval { duration * 0.25 }
-    var holdDuration: TimeInterval { duration * 0.50 }
-    var zoomOutDuration: TimeInterval { duration * 0.25 }
+    // 三阶段动画 (15% + 70% + 15%) - 优化减少频繁缩放
+    var zoomInDuration: TimeInterval { duration * 0.15 }
+    var holdDuration: TimeInterval { duration * 0.70 }
+    var zoomOutDuration: TimeInterval { duration * 0.15 }
     
     func state(at time: TimeInterval) -> ZoomState?
 }
@@ -117,8 +118,10 @@ struct AutoZoomSegment: Equatable, Identifiable {
 struct ZoomTimeline {
     let segments: [AutoZoomSegment]
     let duration: TimeInterval
+    let transitionDuration: TimeInterval  // Segment 间过渡时长
     
     func state(at time: TimeInterval) -> ZoomState
+    func state(at time: TimeInterval, hasKeyboardActivity: Bool) -> ZoomState  // 键盘检测
     func isZoomActive(at time: TimeInterval) -> Bool
 }
 ```
@@ -175,8 +178,8 @@ struct AutoZoomSettings: Codable, Equatable {
 - 左键、右键、双击均可触发
 
 ### BR-2：点击合并 (AC-TR-03) ✅ 已实现
-- 时间间隔 < 0.5s（优化：从 0.3s 增加到 0.5s 减少跳动）
-- 空间距离 < 200px（优化：从 100px 增加到 200px 减少跳动）
+- 时间间隔 < 0.5s（优化防抖）
+- 空间距离 < 150px（优化防抖）
 - 合并后使用点击质心作为焦点
 
 ### BR-3：边界约束 (AC-FR-02) ✅ 已实现
@@ -185,13 +188,13 @@ struct AutoZoomSettings: Codable, Equatable {
 - 使用 `clamp` 确保裁剪区域有效
 
 ### BR-4：三阶段动画 (AC-AN-01) ✅ 已实现
-- Zoom In：占 25% 时长，1.0x → 目标倍数
-- Hold：占 50% 时长，保持目标倍数
-- Zoom Out：占 25% 时长，目标倍数 → 1.0x
+- Zoom In：占 15% 时长，1.0x → 目标倍数（优化快速响应）
+- Hold：占 70% 时长，保持目标倍数（延长稳定时间）
+- Zoom Out：占 15% 时长，目标倍数 → 1.0x（优化快速恢复）
 
 ### BR-5：Segment 合并 (AC-AN-03) ✅ 已实现
-- 相邻 segment 间隔 < 0.5s（优化：从 0.3s 增加减少跳动）
-- 焦点距离 < 0.10 normalized（优化：从 0.05 增加）
+- 相邻 segment 间隔 < 0.5s（优化防抖）
+- 焦点距离 < 80px (normalized ~0.08，优化防抖)
 - 合并后取最大缩放倍数
 
 ### BR-6：缩放范围限制 (AC-FR-03) ✅ 已实现
@@ -210,11 +213,15 @@ struct AutoZoomSettings: Codable, Equatable {
 - 保持高亮效果在缩放画面中清晰可见
 - 默认放大 1.6 倍
 
-### BR-9：键盘事件触发 Zoom Out (AC-KB-01) ✅ 已实现
-- 键盘输入（非修饰键）触发当前 segment 提前结束
-- Zoom-in 阶段完成后检测键盘事件
-- 检测到键盘事件时立即开始 zoom-out 过渡
-- 避免打字时画面持续放大造成眩晕
+### BR-9：Segment 间平滑过渡 (AC-TR-04) ✅ 已实现
+- 两个 segment 间隔 < 0.4s 时，保持缩放状态
+- 焦点使用 easeInOut 插值平滑过渡
+- 避免频繁操作时画面跳动
+
+### BR-10：键盘活动检测 (AC-KB-01) ✅ 已实现
+- 检测到键盘输入时自动缩小到正常大小
+- 键盘活动窗口为 0.5s
+- 打字时不需要缩放，保持全屏视野
 
 ## 验收标准
 
@@ -226,8 +233,6 @@ struct AutoZoomSettings: Codable, Equatable {
 - [x] 三阶段动画平滑 (AC-AN-01, AC-AN-02)
 - [x] 导出界面显示 Auto Zoom 选项
 - [x] 与光标增强效果正确集成
-- [x] 键盘事件监听 (AC-KB-01)
-- [x] 防抖优化减少画面跳动
 
 ### 性能要求
 - **分析耗时**：瞬时（< 100ms）
@@ -236,10 +241,10 @@ struct AutoZoomSettings: Codable, Equatable {
 
 ## 测试覆盖
 
-### 单元测试 (Phase 1-3)
+### 单元测试 (Phase 1-4)
 - `AutoZoomSegmentTests`: 18 个测试 ✅ (含跟随模式测试)
 - `ZoomSegmentGeneratorTests`: 13 个测试 ✅
-- `ZoomTimelineTests`: 12 个测试 ✅
+- `ZoomTimelineTests`: 17 个测试 ✅ (含过渡和键盘测试)
 - `AutoZoomSettingsTests`: 9 个测试 ✅
 - `EasingCurveTests`: 8 个测试 ✅
 
@@ -252,8 +257,8 @@ struct AutoZoomSettings: Codable, Equatable {
 - TC-6：跟随模式（游标移动时中心跟随）
 - TC-7：跟随边界约束（角落位置）
 - TC-8：高亮缩放（缩放时高亮放大）
-- TC-9：键盘输入时 zoom out（打字中断缩放）
-- TC-10：快速连续点击（防抖优化验证）
+- TC-9：Segment 间过渡（短间隔平滑）
+- TC-10：键盘活动检测（打字时缩小）
 
 ## 文件结构
 
@@ -264,9 +269,9 @@ Features/AutoZoom/
 │       ├── EasingCurve.swift
 │       ├── AutoZoomSettings.swift
 │       ├── AutoZoomSegment.swift      # v3.0 新增
-│       └── ZoomTimeline.swift         # v3.0 新增
+│       └── ZoomTimeline.swift         # v3.0 新增, v3.2 过渡逻辑
 ├── Infrastructure/
-│   ├── ZoomSegmentGenerator.swift     # v3.0 新增, v4.0 键盘截断
+│   ├── ZoomSegmentGenerator.swift     # v3.0 新增
 │   ├── ZoomRenderer.swift
 │   └── (legacy: HotspotAnalyzer, etc.)
 ├── ViewModels/
@@ -274,12 +279,12 @@ Features/AutoZoom/
 └── Views/
     └── AutoZoomSettingsView.swift
 
-Features/CursorEnhancement/Domain/Models/
-├── KeyboardEvent.swift  # v4.0 新增 - 键盘事件模型
-└── CursorTrackSession.swift  # v4.0 更新 - 包含键盘事件
-
-Features/CursorEnhancement/Infrastructure/
-└── MouseTrackerManager.swift  # v4.0 更新 - 键盘事件监听
+Features/CursorEnhancement/
+├── Domain/Models/
+│   └── KeyboardEvent.swift            # v3.2 新增
+└── Infrastructure/
+    ├── MouseTrackerManager.swift      # v3.2 键盘追踪
+    └── KeyboardEventTracker.swift     # v3.2 新增
 
 Features/Export/Infrastructure/
 └── CombinedEffectsExporter.swift  (集成导出器)

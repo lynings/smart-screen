@@ -39,10 +39,10 @@ final class ZoomSegmentGenerator {
         static let `default` = Config(
             defaultDuration: 1.2,
             defaultZoomScale: 2.0,
-            clickMergeTime: 0.5,           // Increased from 0.3s for better merging
-            clickMergeDistancePixels: 200,  // Increased from 100px for better merging
-            segmentMergeGap: 0.5,           // Increased from 0.3s
-            segmentMergeDistance: 0.10,     // Increased from 0.05
+            clickMergeTime: 0.5,           // Increased from 0.3s for better debouncing
+            clickMergeDistancePixels: 150,  // Increased from 100px for smoother experience
+            segmentMergeGap: 0.5,           // Increased from 0.3s to merge more segments
+            segmentMergeDistance: 0.08,     // Increased from 0.05 for more merging
             minZoomScale: 1.0,
             maxZoomScale: 6.0,
             easing: .easeInOut
@@ -106,49 +106,7 @@ final class ZoomSegmentGenerator {
         // 4. Apply boundary constraints (AC-FR-02)
         segments = segments.map { applyBoundaryConstraints($0) }
         
-        // 5. Truncate segments at keyboard events (typing triggers zoom out)
-        segments = truncateAtKeyboardEvents(segments, keyboardEvents: session.typingEvents)
-        
         return segments
-    }
-    
-    // MARK: - Keyboard Event Handling
-    
-    /// Truncate segments when keyboard typing is detected
-    /// This causes zoom to return to normal when user starts typing
-    private func truncateAtKeyboardEvents(
-        _ segments: [AutoZoomSegment],
-        keyboardEvents: [KeyboardEvent]
-    ) -> [AutoZoomSegment] {
-        guard !keyboardEvents.isEmpty else { return segments }
-        
-        return segments.compactMap { segment in
-            // Find first keyboard event during this segment's hold/zoomOut phase
-            // (We allow zoom-in to complete before checking for keyboard events)
-            let keyEventDuringSegment = keyboardEvents.first { event in
-                event.timestamp > segment.zoomInEndTime && event.timestamp < segment.endTime
-            }
-            
-            guard let keyEvent = keyEventDuringSegment else {
-                return segment
-            }
-            
-            // Calculate new end time: start zoom-out immediately at key event
-            let zoomOutDuration = segment.zoomOutDuration
-            let newEndTime = keyEvent.timestamp + zoomOutDuration
-            
-            // Only truncate if it actually shortens the segment
-            guard newEndTime < segment.endTime else { return segment }
-            
-            // Create truncated segment
-            return AutoZoomSegment(
-                id: segment.id,
-                timeRange: segment.startTime...newEndTime,
-                focusCenter: segment.focusCenter,
-                zoomScale: segment.zoomScale,
-                easing: segment.easing
-            )
-        }
     }
     
     // MARK: - Click Merging (AC-TR-03)

@@ -129,12 +129,16 @@ actor CombinedEffectsExporter {
                 // Get cursor position for follow mode (AC-FU-02)
                 let cursorPosition = cursorSession.positionAt(time: timeSeconds)
                 
-                // Get zoom state with follow mode support
+                // Check if keyboard is active (typing triggers zoom-out)
+                let hasKeyboardActivity = cursorSession.hasKeyboardActivityAt(time: timeSeconds)
+                
+                // Get zoom state with follow mode and keyboard activity support
                 let zoomState = zoomTimeline.state(
                     at: timeSeconds,
                     cursorPosition: cursorPosition,
                     followCursor: autoZoomSettings.followCursor,
-                    smoothing: autoZoomSettings.cursorSmoothing
+                    smoothing: autoZoomSettings.cursorSmoothing,
+                    hasKeyboardActivity: hasKeyboardActivity
                 )
                 let currentScale = zoomState.scale
                 let currentCenter = zoomState.center
@@ -330,23 +334,25 @@ actor CombinedEffectsExporter {
             return ZoomTimeline.empty(duration: session.duration)
         }
         
-        // Create generator config from settings
+        // Create generator config from settings with optimized debouncing
         let generatorConfig = ZoomSegmentGenerator.Config(
             defaultDuration: autoZoomSettings.holdTime + autoZoomSettings.duration * 2,
             defaultZoomScale: autoZoomSettings.zoomLevel,
-            clickMergeTime: 0.3,
-            clickMergeDistancePixels: 100,
-            segmentMergeGap: 0.3,
-            segmentMergeDistance: 0.05,
+            clickMergeTime: 0.5,            // Optimized for debouncing rapid clicks
+            clickMergeDistancePixels: 150,   // Increased for smoother experience
+            segmentMergeGap: 0.5,            // Merge segments with short gaps
+            segmentMergeDistance: 0.08,      // Increased for more merging
             minZoomScale: 1.0,
             maxZoomScale: 6.0,
             easing: autoZoomSettings.easing
         )
         
+        // Transition duration matches segment merge gap for seamless transitions
         return ZoomTimeline.from(
             session: session,
             screenSize: screenSize,
-            config: generatorConfig
+            config: generatorConfig,
+            transitionDuration: 0.4
         )
     }
 }

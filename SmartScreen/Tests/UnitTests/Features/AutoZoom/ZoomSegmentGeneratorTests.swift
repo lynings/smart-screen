@@ -93,10 +93,9 @@ final class ZoomSegmentGeneratorTests: XCTestCase {
         XCTAssertEqual(segments.count, 2)
     }
     
-    func test_should_not_merge_clicks_more_than_200px_apart() {
-        // given - clicks far apart (200px = ~0.104 normalized at 1920px width)
-        // Threshold increased to 200px for better merging and reduced zoom flicker
-        let normalizedDistance: CGFloat = 220.0 / 1920.0 // Slightly more than 200px
+    func test_should_not_merge_clicks_more_than_100px_apart() {
+        // given - clicks far apart (100px = ~0.052 normalized at 1920px width)
+        let normalizedDistance: CGFloat = 110.0 / 1920.0 // Slightly more than 100px
         let session = CursorTrackSession(events: [
             MouseEvent(type: .leftClick, position: CGPoint(x: 0.5, y: 0.5), timestamp: 2.0),
             MouseEvent(type: .leftClick, position: CGPoint(x: 0.5 + normalizedDistance, y: 0.5), timestamp: 2.1)
@@ -110,7 +109,7 @@ final class ZoomSegmentGeneratorTests: XCTestCase {
     }
     
     func test_should_use_centroid_for_merged_clicks() {
-        // given - clicks within 200px (~0.104 normalized at 1920px)
+        // given - clicks within 100px (~0.052 normalized at 1920px)
         let session = CursorTrackSession(events: [
             MouseEvent(type: .leftClick, position: CGPoint(x: 0.48, y: 0.5), timestamp: 2.0),
             MouseEvent(type: .leftClick, position: CGPoint(x: 0.52, y: 0.5), timestamp: 2.1)

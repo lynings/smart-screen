@@ -111,20 +111,20 @@ actor ScreenCaptureEngine: CaptureEngineProtocol {
     func stopCapture() async -> RecordingSession {
         print("[Capture] stopCapture called")
         
-        // 1. Stop mouse tracking and capture cursor data
-        let (trackerEvents, trackerKeyboardEvents, trackerDuration) = await MainActor.run {
+        // 1. Stop mouse tracking and capture cursor data (including keyboard events)
+        let (trackerEvents, keyboardEvents, trackerDuration) = await MainActor.run {
             MouseTrackerManager.shared.stopTracking()
             let events = MouseTrackerManager.shared.events
-            let keyEvents = MouseTrackerManager.shared.keyboardEvents
+            let keyboard = MouseTrackerManager.shared.keyboardEvents
             let duration = MouseTrackerManager.shared.trackingDuration
-            return (events, keyEvents, duration)
+            return (events, keyboard, duration)
         }
         let cursorTrackSession = CursorTrackSession(
             events: trackerEvents,
-            keyboardEvents: trackerKeyboardEvents,
-            duration: trackerDuration
+            duration: trackerDuration,
+            keyboardEvents: keyboardEvents
         )
-        print("[Capture] Tracking stopped, \(trackerEvents.count) mouse events, \(trackerKeyboardEvents.count) keyboard events")
+        print("[Capture] Mouse tracking stopped, \(trackerEvents.count) mouse events, \(keyboardEvents.count) keyboard events recorded")
         
         // 2. Finalize pause duration
         if _isPaused, let pauseStart = pauseStartTime {

@@ -3,15 +3,33 @@ import Foundation
 /// Stores cursor tracking data for a recording session
 struct CursorTrackSession: Codable {
     let events: [MouseEvent]
-    let keyboardEvents: [KeyboardEvent]
     let duration: TimeInterval
+    
+    /// Keyboard events for detecting typing activity (optional for backward compatibility)
+    let keyboardEvents: [KeyboardEvent]
     
     // MARK: - Initialization
     
-    init(events: [MouseEvent], keyboardEvents: [KeyboardEvent] = [], duration: TimeInterval) {
+    init(events: [MouseEvent], duration: TimeInterval, keyboardEvents: [KeyboardEvent] = []) {
         self.events = events
-        self.keyboardEvents = keyboardEvents
         self.duration = duration
+        self.keyboardEvents = keyboardEvents
+    }
+    
+    // MARK: - Codable (backward compatibility)
+    
+    enum CodingKeys: String, CodingKey {
+        case events
+        case duration
+        case keyboardEvents
+    }
+    
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        events = try container.decode([MouseEvent].self, forKey: .events)
+        duration = try container.decode(TimeInterval.self, forKey: .duration)
+        // Optional for backward compatibility with old recordings
+        keyboardEvents = try container.decodeIfPresent([KeyboardEvent].self, forKey: .keyboardEvents) ?? []
     }
     
     // MARK: - Computed Properties
@@ -26,9 +44,13 @@ struct CursorTrackSession: Codable {
         events.compactMap { $0.toClickEvent() }
     }
     
-    /// Non-modifier keyboard events (actual typing, not just Shift/Cmd/etc.)
-    var typingEvents: [KeyboardEvent] {
-        keyboardEvents.filter { !$0.isModifier }
+    /// Check if there was keyboard activity at a specific time
+    func hasKeyboardActivityAt(time: TimeInterval) -> Bool {
+        keyboardEvents.contains { event in
+            let windowStart = event.timestamp
+            let windowEnd = event.timestamp + KeyboardEvent.activityWindowDuration
+            return time >= windowStart && time <= windowEnd
+        }
     }
     
     // MARK: - Trajectory Processing
