@@ -1,7 +1,7 @@
 # Auto Zoom - 技术规格
 
 > **层级**: L3 - 技术设计  
-> **状态**: ✅ 已实现 (v3.1 - 完整跟随模式)  
+> **状态**: ✅ 已实现 (v4.0 - 智能行为分析)  
 > **关联**: [功能规格](./functional-spec.md)
 
 ## 架构设计
@@ -13,16 +13,17 @@
 │  CursorTrackSession │  输入：鼠标事件序列
 └──────────┬──────────┘
            ↓
-┌─────────────────────┐
-│ ZoomSegmentGenerator│  分析点击事件，生成 segments
-│  - 点击合并         │
-│  - 边界约束         │
-│  - 缩放范围限制     │
-└──────────┬──────────┘
+┌─────────────────────────┐
+│ SmartZoomBehaviorAnalyzer│  行为分析 + 状态机
+│  - 稳定性检测           │
+│  - 频率抑制             │
+│  - 大跨度处理           │
+│  - 冷却机制             │
+└──────────┬──────────────┘
            ↓
 ┌─────────────────────┐
-│    ZoomTimeline     │  管理 segments，查询时间点状态
-│  [AutoZoomSegment]  │
+│  SmartZoomTimeline  │  关键帧时间线
+│  [SmartZoomKeyframe]│  - 平滑插值
 └──────────┬──────────┘
            ↓
 ┌─────────────────────┐
@@ -40,187 +41,233 @@
 
 ## 核心组件
 
-### 1. AutoZoomSegment
+### 1. ZoomBehaviorState
 
-表示一个缩放片段，包含时间范围、焦点和三阶段动画。支持静态中心和跟随模式。
+状态机的状态定义：
 
 ```swift
-struct AutoZoomSegment: Equatable, Identifiable {
-    let id: UUID
-    let timeRange: ClosedRange<TimeInterval>
-    let focusCenter: CGPoint  // Normalized (0-1), 初始点击位置
-    let zoomScale: CGFloat
+enum ZoomBehaviorState: Equatable {
+    /// 正常视图 (1.0x)，无活动
+    case idle
+    
+    /// 检测到活动，等待光标稳定
+    case observing(since: TimeInterval, position: CGPoint)
+    
+    /// 正在放大
+    case zoomingIn(startTime: TimeInterval, from: CGFloat, to: CGFloat, center: CGPoint)
+    
+    /// 已放大，跟随光标
+    case zoomed(center: CGPoint, scale: CGFloat)
+    
+    /// 正在缩小（检测到大跨度操作）
+    case zoomingOut(startTime: TimeInterval, from: CGFloat, center: CGPoint)
+    
+    /// 冷却中，等待新的稳定
+    case cooldown(since: TimeInterval, lastPosition: CGPoint)
+}
+```
+
+### 2. ZoomBehaviorConfig
+
+行为分析的配置参数：
+
+```swift
+struct ZoomBehaviorConfig: Equatable {
+    // 稳定性检测
+    let stabilizationTime: TimeInterval  // 光标稳定时间 (0.5s)
+    let maxStableSpeed: CGFloat          // 最大稳定速度 (0.3)
+    let stableAreaRadius: CGFloat        // 稳定区域半径 (0.05)
+    
+    // 抑制条件
+    let largeMovementThreshold: CGFloat  // 大跨度阈值 (0.25)
+    let maxClickFrequency: Double        // 最大点击频率 (3.0)
+    let cooldownDuration: TimeInterval   // 冷却时间 (0.3s)
+    
+    // 动画参数
+    let zoomInDuration: TimeInterval     // 放大时长 (0.4s)
+    let zoomOutDuration: TimeInterval    // 缩小时长 (0.3s)
+    let targetScale: CGFloat             // 目标缩放 (2.0)
     let easing: EasingCurve
     
-    // MARK: - Animation Phases (25% + 50% + 25%)
-    
-    var zoomInDuration: TimeInterval { duration * 0.25 }
-    var holdDuration: TimeInterval { duration * 0.50 }
-    var zoomOutDuration: TimeInterval { duration * 0.25 }
-    
-    // MARK: - State Query
-    
-    /// 静态中心模式 (AC-FU-01)
-    func state(at time: TimeInterval) -> ZoomState?
-    
-    /// 跟随模式 (AC-FU-02)
-    func state(
-        at time: TimeInterval,
-        cursorPosition: CGPoint?,
-        followCursor: Bool,
-        smoothing: Double
-    ) -> ZoomState? {
-        // 如果 followCursor = true，使用 cursorPosition 作为中心
-        // 并应用边界约束 (AC-FU-03)
-    }
-    
-    // MARK: - Boundary Constraints (AC-FU-03)
-    
-    private func constrainedCenter(for cursor: CGPoint, at scale: CGFloat) -> CGPoint {
-        // 确保缩放后可视区域不超出画面边界
-    }
-    
-    // MARK: - Factory Methods
-    
-    static func fromClick(_ click: ClickEvent, duration: TimeInterval, zoomScale: CGFloat) -> AutoZoomSegment
-    static func fromClicks(_ clicks: [ClickEvent], ...) -> AutoZoomSegment
+    static let `default`: ZoomBehaviorConfig
+    static func from(settings: AutoZoomSettings) -> ZoomBehaviorConfig
 }
 ```
 
-### 2. ZoomSegmentGenerator
+### 3. SmartZoomKeyframe
 
-从点击事件生成 segments，处理合并和边界约束。
+关键帧数据结构：
 
 ```swift
-final class ZoomSegmentGenerator {
+struct SmartZoomKeyframe: Equatable {
+    let time: TimeInterval
+    let scale: CGFloat
+    let center: CGPoint  // Normalized (0-1)
     
-    struct Config {
-        let defaultDuration: TimeInterval = 1.2      // AC-TR-01
-        let defaultZoomScale: CGFloat = 2.0
-        let clickMergeTime: TimeInterval = 0.3       // AC-TR-03
-        let clickMergeDistancePixels: CGFloat = 100  // AC-TR-03
-        let segmentMergeGap: TimeInterval = 0.3      // AC-AN-03
-        let segmentMergeDistance: CGFloat = 0.05     // AC-AN-03
-        let minZoomScale: CGFloat = 1.0              // AC-FR-03
-        let maxZoomScale: CGFloat = 6.0              // AC-FR-03
-        let easing: EasingCurve = .easeInOut
-    }
-    
-    func generate(from session: CursorTrackSession, screenSize: CGSize) -> [AutoZoomSegment] {
-        // 1. 合并相邻点击 (AC-TR-03)
-        // 2. 为每组点击生成 segment
-        // 3. 合并相邻 segments (AC-AN-03)
-        // 4. 应用边界约束 (AC-FR-02)
-    }
+    static let idle = SmartZoomKeyframe(time: 0, scale: 1.0, center: CGPoint(x: 0.5, y: 0.5))
 }
 ```
 
-### 3. ZoomTimeline
+### 4. SmartZoomTimeline
 
-管理 segments 并提供时间点状态查询，支持跟随模式。
+关键帧时间线，支持平滑插值：
 
 ```swift
-struct ZoomTimeline {
-    let segments: [AutoZoomSegment]
+struct SmartZoomTimeline: Equatable {
+    let keyframes: [SmartZoomKeyframe]
     let duration: TimeInterval
     
-    /// 静态中心模式 (AC-FU-01)
-    func state(at time: TimeInterval) -> ZoomState
-    
-    /// 跟随模式 (AC-FU-02)
-    func state(
-        at time: TimeInterval,
-        cursorPosition: CGPoint?,
-        followCursor: Bool,
-        smoothing: Double
-    ) -> ZoomState {
-        // 查找当前活跃的 segment 并返回其状态
-        // 如果 followCursor = true，传递 cursorPosition 到 segment
+    /// 获取指定时间的插值状态
+    func state(at time: TimeInterval) -> (scale: CGFloat, center: CGPoint) {
+        // 1. 找到前后关键帧
+        // 2. 使用 ease-in-out 插值
+        // 3. 同时插值 scale 和 center
     }
     
-    func isZoomActive(at time: TimeInterval) -> Bool
-    
-    // Statistics
-    var segmentCount: Int
-    var totalZoomTime: TimeInterval
-    var zoomPercentage: Double
-    
-    // Factory
-    static func from(session: CursorTrackSession, screenSize: CGSize, config: Config) -> ZoomTimeline
+    static func empty(duration: TimeInterval) -> SmartZoomTimeline
 }
 ```
 
-### 4. ZoomRenderer
+### 5. SmartZoomBehaviorAnalyzer
 
-渲染缩放后的帧。
+核心行为分析器：
 
 ```swift
-final class ZoomRenderer {
+final class SmartZoomBehaviorAnalyzer {
+    private let config: ZoomBehaviorConfig
     
-    func renderFrame(
-        source: CGImage,
-        scale: CGFloat,
-        center: CGPoint,
-        outputSize: CGSize
-    ) -> CGImage? {
-        // 1. 计算裁剪区域
-        // 2. 裁剪源图像
-        // 3. 缩放到输出尺寸
-    }
+    init(config: ZoomBehaviorConfig = .default)
     
-    func calculateCropRect(
-        scale: CGFloat,
-        center: CGPoint,
-        sourceSize: CGSize
-    ) -> CGRect {
-        // 计算裁剪矩形，注意 Y 轴坐标转换
-        // CGImage: Y=0 在底部
-        // Normalized: Y=0 在顶部
+    /// 分析 cursor session，生成智能缩放时间线
+    func analyze(session: CursorTrackSession) -> SmartZoomTimeline {
+        // 1. 构建活动事件序列
+        // 2. 通过状态机处理事件
+        // 3. 生成关键帧
     }
 }
 ```
 
 ## 算法详解
 
-### 点击合并算法 (AC-TR-03)
+### 状态机转换
+
+```
+┌─────────────────────────────────────────────────────────┐
+│                     状态转换规则                         │
+├─────────────────────────────────────────────────────────┤
+│                                                         │
+│  idle ────────点击────────→ observing                   │
+│                                                         │
+│  observing ──停留0.5s────→ zoomingIn                    │
+│           ──快速移动─────→ observing (重置)              │
+│           ──高频点击─────→ observing (重置)              │
+│                                                         │
+│  zoomingIn ──动画完成────→ zoomed                       │
+│            ──大跨度移动──→ zoomingOut                   │
+│                                                         │
+│  zoomed ────大跨度移动───→ zoomingOut                   │
+│         ────小范围移动───→ zoomed (平滑平移)            │
+│                                                         │
+│  zoomingOut ─动画完成────→ cooldown                     │
+│                                                         │
+│  cooldown ──0.3s后───────→ observing                    │
+│                                                         │
+└─────────────────────────────────────────────────────────┘
+```
+
+### 稳定性检测 (AC-ST-01)
 
 ```swift
-func mergeClicks(_ clicks: [ClickEvent], screenSize: CGSize) -> [[ClickEvent]] {
-    let sorted = clicks.sorted { $0.timestamp < $1.timestamp }
-    let normalizedDistance = 100.0 / max(screenSize.width, screenSize.height)
+// 在 observing 状态下
+if event.type == .click || event.type == .move {
+    let distance = hypot(
+        event.position.x - observePosition.x,
+        event.position.y - observePosition.y
+    )
     
-    var groups: [[ClickEvent]] = []
-    var currentGroup: [ClickEvent] = [sorted[0]]
-    
-    for i in 1..<sorted.count {
-        let current = sorted[i]
-        let previous = currentGroup.last!
-        
-        let timeDiff = current.timestamp - previous.timestamp
-        let distance = hypot(
-            current.position.x - previous.position.x,
-            current.position.y - previous.position.y
-        )
-        
-        if timeDiff < 0.3 && distance < normalizedDistance {
-            currentGroup.append(current)
-        } else {
-            groups.append(currentGroup)
-            currentGroup = [current]
-        }
+    if distance > config.stableAreaRadius {
+        // 移动出稳定区域，重置观察
+        state = .observing(since: time, position: event.position)
+    } else if time - since >= config.stabilizationTime {
+        // 稳定超过 0.5s，触发缩放
+        state = .zoomingIn(...)
     }
-    groups.append(currentGroup)
-    
-    return groups
 }
 ```
 
-### 边界约束算法 (AC-FR-02)
+### 频率抑制 (AC-ST-02)
 
 ```swift
-func applyBoundaryConstraints(_ segment: AutoZoomSegment) -> AutoZoomSegment {
-    let scale = segment.zoomScale
-    guard scale > 1.0 else { return segment }
+// 跟踪最近 1 秒的点击
+recentClicks = recentClicks.filter { time - $0 < 1.0 }
+
+if event.type == .click {
+    recentClicks.append(time)
+}
+
+let clickFrequency = Double(recentClicks.count)
+if clickFrequency > config.maxClickFrequency {
+    // 高频点击，重置观察状态
+    state = .observing(since: time, position: event.position)
+}
+```
+
+### 大跨度处理 (AC-ST-03)
+
+```swift
+// 在 zoomed 状态下
+if event.type == .click {
+    let movementDistance = hypot(
+        event.position.x - lastClickPosition.x,
+        event.position.y - lastClickPosition.y
+    )
+    
+    if movementDistance > config.largeMovementThreshold {
+        // 大跨度移动，先 zoom out
+        state = .zoomingOut(startTime: time, from: scale, center: center)
+        keyframes.append(SmartZoomKeyframe(time: time, scale: scale, center: center))
+        keyframes.append(SmartZoomKeyframe(
+            time: time + config.zoomOutDuration,
+            scale: 1.0,
+            center: center
+        ))
+    }
+}
+```
+
+### 关键帧插值
+
+```swift
+func state(at time: TimeInterval) -> (scale: CGFloat, center: CGPoint) {
+    // 找到前后关键帧
+    guard let afterIndex = keyframes.firstIndex(where: { $0.time > time }) else {
+        return (keyframes.last!.scale, keyframes.last!.center)
+    }
+    
+    if afterIndex == 0 {
+        return (keyframes.first!.scale, keyframes.first!.center)
+    }
+    
+    let before = keyframes[afterIndex - 1]
+    let after = keyframes[afterIndex]
+    
+    // 使用 ease-in-out 插值
+    let progress = (time - before.time) / (after.time - before.time)
+    let easedProgress = CGFloat(EasingCurve.easeInOut.value(at: progress))
+    
+    let scale = before.scale + (after.scale - before.scale) * easedProgress
+    let centerX = before.center.x + (after.center.x - before.center.x) * easedProgress
+    let centerY = before.center.y + (after.center.y - before.center.y) * easedProgress
+    
+    return (scale, CGPoint(x: centerX, y: centerY))
+}
+```
+
+### 边界约束 (AC-FR-02)
+
+```swift
+private func constrainCenter(_ position: CGPoint, scale: CGFloat) -> CGPoint {
+    guard scale > 1.0 else { return position }
     
     // 计算可视区域尺寸
     let visibleWidth = 1.0 / scale
@@ -229,81 +276,36 @@ func applyBoundaryConstraints(_ segment: AutoZoomSegment) -> AutoZoomSegment {
     let halfHeight = visibleHeight / 2
     
     // 约束中心点
-    let constrainedX = max(halfWidth, min(1.0 - halfWidth, segment.focusCenter.x))
-    let constrainedY = max(halfHeight, min(1.0 - halfHeight, segment.focusCenter.y))
+    let constrainedX = max(halfWidth, min(1.0 - halfWidth, position.x))
+    let constrainedY = max(halfHeight, min(1.0 - halfHeight, position.y))
     
-    return AutoZoomSegment(
-        timeRange: segment.timeRange,
-        focusCenter: CGPoint(x: constrainedX, y: constrainedY),
-        zoomScale: segment.zoomScale,
-        easing: segment.easing
-    )
-}
-```
-
-### 三阶段动画算法 (AC-AN-01)
-
-```swift
-func state(at time: TimeInterval) -> ZoomState? {
-    let relativeTime = time - startTime
-    
-    if relativeTime < zoomInDuration {
-        // Zoom In (25%)
-        let progress = relativeTime / zoomInDuration
-        let easedProgress = easing.value(at: progress)
-        let scale = 1.0 + (zoomScale - 1.0) * CGFloat(easedProgress)
-        return ZoomState(scale: scale, center: focusCenter, phase: .zoomIn)
-        
-    } else if relativeTime < zoomInDuration + holdDuration {
-        // Hold (50%)
-        return ZoomState(scale: zoomScale, center: focusCenter, phase: .hold)
-        
-    } else {
-        // Zoom Out (25%)
-        let zoomOutStart = zoomInDuration + holdDuration
-        let progress = (relativeTime - zoomOutStart) / zoomOutDuration
-        let easedProgress = easing.value(at: progress)
-        let scale = zoomScale - (zoomScale - 1.0) * CGFloat(easedProgress)
-        return ZoomState(scale: scale, center: focusCenter, phase: .zoomOut)
-    }
+    return CGPoint(x: constrainedX, y: constrainedY)
 }
 ```
 
 ## 配置项
 
-### ZoomSegmentGenerator.Config
+### ZoomBehaviorConfig
 
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
-| `defaultDuration` | TimeInterval | 1.2 | 默认 segment 时长 |
-| `defaultZoomScale` | CGFloat | 2.0 | 默认缩放倍数 |
-| `clickMergeTime` | TimeInterval | 0.3 | 点击合并时间阈值 |
-| `clickMergeDistancePixels` | CGFloat | 100 | 点击合并距离阈值 (px) |
-| `segmentMergeGap` | TimeInterval | 0.3 | segment 合并间隔阈值 |
-| `segmentMergeDistance` | CGFloat | 0.05 | segment 合并距离阈值 |
-| `minZoomScale` | CGFloat | 1.0 | 最小缩放倍数 |
-| `maxZoomScale` | CGFloat | 6.0 | 最大缩放倍数 |
+| `stabilizationTime` | TimeInterval | 0.5 | 光标稳定时间阈值 |
+| `maxStableSpeed` | CGFloat | 0.3 | 最大稳定速度 |
+| `stableAreaRadius` | CGFloat | 0.05 | 稳定区域半径 |
+| `largeMovementThreshold` | CGFloat | 0.25 | 大跨度移动阈值 |
+| `maxClickFrequency` | Double | 3.0 | 最大点击频率 |
+| `cooldownDuration` | TimeInterval | 0.3 | 冷却时间 |
+| `zoomInDuration` | TimeInterval | 0.4 | 放大动画时长 |
+| `zoomOutDuration` | TimeInterval | 0.3 | 缩小动画时长 |
+| `targetScale` | CGFloat | 2.0 | 目标缩放倍数 |
 | `easing` | EasingCurve | .easeInOut | 缓动曲线 |
-
-### AutoZoomSettings
-
-| 参数 | 类型 | 范围 | 默认值 | 说明 |
-|------|------|------|--------|------|
-| `isEnabled` | Bool | - | true | 是否启用 Auto Zoom |
-| `zoomLevel` | CGFloat | 1.0-6.0 | 2.0 | 缩放倍数 |
-| `duration` | TimeInterval | 0.6-3.0 | 1.2 | 总 segment 时长 |
-| `easing` | EasingCurve | - | .easeInOut | 缓动曲线 |
-| `followCursor` | Bool | - | true | 跟随模式 (AC-FU-01, AC-FU-02) |
-| `cursorSmoothing` | Double | 0.1-0.5 | 0.2 | 跟随平滑度 |
-| `cursorScale` | CGFloat | 1.0-3.0 | 1.6 | 高亮缩放倍数 (AC-CE-01) |
-| `cursorAutoHide` | Bool | - | false | 自动隐藏（待实现）|
 
 ## 坐标系统
 
 ### 归一化坐标
 - X: 0 = 左边, 1 = 右边
 - Y: 0 = 顶部, 1 = 底部
-- 用于：`focusCenter`, `position` 等
+- 用于：`center`, `position` 等
 
 ### CGImage 坐标
 - X: 0 = 左边
@@ -331,8 +333,8 @@ normalizedY = 1.0 - (cgImageY / imageHeight)
 - 复用 CGContext
 
 ### 分析优化
-- 预计算 ZoomTimeline，导出时直接查询
-- 二分查找活跃 segment（大数据量时）
+- 预计算 SmartZoomTimeline，导出时直接查询
+- 线性查找关键帧（通常数量少）
 
 ## 测试策略
 
@@ -340,42 +342,42 @@ normalizedY = 1.0 - (cgImageY / imageHeight)
 
 | 组件 | 测试数 | 覆盖重点 |
 |------|--------|----------|
-| AutoZoomSegment | 18 | 三阶段动画、合并逻辑、跟随模式 |
-| ZoomSegmentGenerator | 13 | 点击合并、边界约束、缩放限制 |
-| ZoomTimeline | 12 | 状态查询、统计计算 |
-| AutoZoomSettings | 9 | 值范围、预设 |
+| SmartZoomBehaviorAnalyzer | 9 | 稳定触发、频率抑制、大跨度处理 |
+| ZoomBehaviorState | 6 | 状态属性 |
+| ZoomBehaviorConfig | 2 | 默认值、设置转换 |
+| ActivityEvent | 2 | 事件类型 |
 
 ### 验证 AC
 
 | AC | 测试方法 |
 |----|----------|
-| AC-TR-01 | `test_should_create_segment_for_single_click` |
-| AC-TR-02 | `test_should_return_empty_segments_when_no_clicks` |
-| AC-TR-03 | `test_should_merge_rapid_clicks_within_300ms` |
-| AC-FR-02 | `test_should_constrain_focus_when_click_at_corner` |
-| AC-FR-03 | `test_should_clamp_zoom_scale_to_maximum` |
-| AC-AN-01 | `test_should_have_correct_phase_durations` |
-| AC-AN-03 | `test_should_merge_adjacent_segments_when_close` |
-| AC-FU-01 | `test_should_use_focus_center_when_follow_disabled` |
-| AC-FU-02 | `test_should_follow_cursor_when_enabled` |
-| AC-FU-03 | `test_should_constrain_center_when_following_at_corner` |
+| AC-ST-01 | `test_should_zoom_after_stabilization_time` |
+| AC-ST-02 | `test_should_suppress_zoom_on_high_frequency_clicks` |
+| AC-ST-03 | `test_should_zoom_out_on_large_movement` |
+| AC-ST-04 | 冷却机制在状态机中实现 |
+| AC-FR-02 | `test_should_constrain_zoom_center_at_edges` |
+| AC-AN-02 | `test_should_interpolate_smoothly_between_keyframes` |
 
 ## 文件结构
 
 ```
 Features/AutoZoom/
 ├── Domain/Models/
-│   ├── AutoZoomSegment.swift      # Segment 数据模型
-│   ├── ZoomTimeline.swift         # 时间线管理
-│   ├── AutoZoomSettings.swift     # 配置
-│   └── EasingCurve.swift          # 缓动曲线
+│   ├── ZoomBehaviorState.swift       # v4.0 状态机
+│   ├── AutoZoomSettings.swift        # 配置
+│   ├── EasingCurve.swift             # 缓动曲线
+│   └── (legacy: AutoZoomSegment, ZoomTimeline)
 ├── Infrastructure/
-│   ├── ZoomSegmentGenerator.swift # Segment 生成器
-│   └── ZoomRenderer.swift         # 帧渲染
+│   ├── SmartZoomBehaviorAnalyzer.swift  # v4.0 行为分析器
+│   ├── ZoomRenderer.swift               # 帧渲染
+│   └── (legacy: ZoomSegmentGenerator)
 ├── ViewModels/
 │   └── AutoZoomViewModel.swift
 └── Views/
     └── AutoZoomSettingsView.swift
+
+Features/Export/Infrastructure/
+└── CombinedEffectsExporter.swift  (使用 SmartZoomBehaviorAnalyzer)
 ```
 
 ## 相关文档
