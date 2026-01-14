@@ -1,0 +1,46 @@
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# Build artifacts
+SmartScreen/SmartScreen.app/
+SmartScreen/SmartScreen.xcodeproj/
+*.xcodeproj/
+*.xcworkspace/
+DerivedData/
+*.dSYM/
+
+# Xcode
+xcuserdata/
+*.xccheckout
+*.xcscmblueprint
+*.hmap
+*.ipa
+*.dSYM.zip
+*.app.dSYM.zip
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# IDE
+.idea/
+*.swp
+*.swo
+*~
+.history/
+.specstory/
+.cursor/
+
+# Test artifacts
+*.xcresult/
+
+# SpecStory
+.specstory/.project.json
+.specstory/.what-is-this.md
+
+# Cursor IDE indexing
+.cursorindexingignore

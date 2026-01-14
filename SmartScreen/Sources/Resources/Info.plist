@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>CFBundleName</key>
+    <string>SmartScreen</string>
+    <key>CFBundleIdentifier</key>
+    <string>com.smartscreen.app</string>
+    <key>CFBundleVersion</key>
+    <string>1.0</string>
+    <key>CFBundleShortVersionString</key>
+    <string>1.0.0</string>
+    <key>LSMinimumSystemVersion</key>
+    <string>14.0</string>
+    <key>NSScreenCaptureUsageDescription</key>
+    <string>SmartScreen needs screen recording permission to capture your screen.</string>
+    <key>NSMicrophoneUsageDescription</key>
+    <string>SmartScreen needs microphone access to record audio with your screen recordings.</string>
+</dict>
+</plist>
