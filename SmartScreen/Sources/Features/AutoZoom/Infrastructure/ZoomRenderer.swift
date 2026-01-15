@@ -21,15 +21,21 @@ final class ZoomRenderer {
     ) -> CGImage? {
         guard let source else { return nil }
         
-        // No zoom needed
-        if scale <= 1.0 {
+        let sourceSize = CGSize(width: source.width, height: source.height)
+        let effectiveScale = max(1.0, scale)
+        
+        // Fast path: identical size + no zoom
+        if effectiveScale == 1.0, outputSize == sourceSize {
             return source
         }
         
-        let sourceSize = CGSize(width: source.width, height: source.height)
-        
         // 1. Calculate crop rectangle
-        let cropRect = calculateCropRect(scale: scale, center: center, sourceSize: sourceSize)
+        let cropRect = calculateCropRect(
+            scale: effectiveScale,
+            center: center,
+            sourceSize: sourceSize,
+            outputSize: outputSize
+        )
         
         // 2. Crop the source image
         guard let croppedImage = source.cropping(to: cropRect) else {
@@ -51,11 +57,24 @@ final class ZoomRenderer {
     func calculateCropRect(
         scale: CGFloat,
         center: CGPoint,
-        sourceSize: CGSize
+        sourceSize: CGSize,
+        outputSize: CGSize
     ) -> CGRect {
-        // At scale X, we show 1/X of the image
-        let cropWidth = sourceSize.width / scale
-        let cropHeight = sourceSize.height / scale
+        // At scale X, we show ~1/X of the image on the limiting dimension,
+        // while preserving output aspect ratio to avoid stretching.
+        let outputAspect = outputSize.height > 0 ? (outputSize.width / outputSize.height) : (sourceSize.width / max(1, sourceSize.height))
+        
+        // Confirmed visible extents at this scale
+        let maxCropWidth = sourceSize.width / scale
+        let maxCropHeight = sourceSize.height / scale
+        
+        // Start by fitting width, then clamp to height if needed.
+        var cropWidth = maxCropWidth
+        var cropHeight = cropWidth / outputAspect
+        if cropHeight > maxCropHeight {
+            cropHeight = maxCropHeight
+            cropWidth = cropHeight * outputAspect
+        }
         
         // Calculate center in pixel coordinates
         // Note: CGImage Y-axis is bottom-to-top, but our normalized coords are top-to-bottom
@@ -77,6 +96,15 @@ final class ZoomRenderer {
             width: cropWidth,
             height: cropHeight
         )
+    }
+
+    // Backwards-compatible overload (used by existing tests)
+    func calculateCropRect(
+        scale: CGFloat,
+        center: CGPoint,
+        sourceSize: CGSize
+    ) -> CGRect {
+        calculateCropRect(scale: scale, center: center, sourceSize: sourceSize, outputSize: sourceSize)
     }
     
     // MARK: - Image Scaling

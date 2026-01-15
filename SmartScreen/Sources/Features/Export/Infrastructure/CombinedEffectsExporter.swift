@@ -46,6 +46,7 @@ actor CombinedEffectsExporter {
         videoURL: URL,
         cursorSession: CursorTrackSession,
         to outputURL: URL,
+        renderSize: CGSize? = nil,
         progressHandler: ((Double) -> Void)? = nil
     ) async throws {
         // Call new interface with empty keyboard events
@@ -54,6 +55,7 @@ actor CombinedEffectsExporter {
             cursorSession: cursorSession,
             keyboardEvents: [],
             to: outputURL,
+            renderSize: renderSize,
             progressHandler: progressHandler
         )
     }
@@ -65,6 +67,7 @@ actor CombinedEffectsExporter {
         cursorSession: CursorTrackSession,
         keyboardEvents: [KeyboardEvent],
         to outputURL: URL,
+        renderSize: CGSize? = nil,
         progressHandler: ((Double) -> Void)? = nil
     ) async throws {
         _isExporting = true
@@ -82,15 +85,17 @@ actor CombinedEffectsExporter {
         }
         
         let duration = try await asset.load(.duration)
-        let videoSize = try await videoTrack.load(.naturalSize)
+        let sourceVideoSize = try await videoTrack.load(.naturalSize)
         let frameRate = try await videoTrack.load(.nominalFrameRate)
         
-        print("[CombinedExporter] Video size: \(videoSize), duration: \(duration.seconds)s")
+        let outputVideoSize = renderSize ?? sourceVideoSize
+        print("[CombinedExporter] Source size: \(sourceVideoSize), output size: \(outputVideoSize), duration: \(duration.seconds)s")
         
         // 2. Generate continuous zoom timeline (Auto Zoom 2.0)
         let zoomTimeline = createContinuousZoomTimeline(
             from: cursorSession,
-            keyboardEvents: keyboardEvents
+            keyboardEvents: keyboardEvents,
+            referenceSize: sourceVideoSize
         )
         print("[CombinedExporter] Generated continuous zoom timeline with \(zoomTimeline.count) keyframes")
         
@@ -107,15 +112,15 @@ actor CombinedEffectsExporter {
         
         let writerInputSettings: [String: Any] = [
             AVVideoCodecKey: AVVideoCodecType.h264,
-            AVVideoWidthKey: Int(videoSize.width),
-            AVVideoHeightKey: Int(videoSize.height)
+            AVVideoWidthKey: Int(outputVideoSize.width),
+            AVVideoHeightKey: Int(outputVideoSize.height)
         ]
         let writerInput = AVAssetWriterInput(mediaType: .video, outputSettings: writerInputSettings)
         
         let pixelBufferAttributes: [String: Any] = [
             kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
-            kCVPixelBufferWidthKey as String: Int(videoSize.width),
-            kCVPixelBufferHeightKey as String: Int(videoSize.height)
+            kCVPixelBufferWidthKey as String: Int(outputVideoSize.width),
+            kCVPixelBufferHeightKey as String: Int(outputVideoSize.height)
         ]
         let adaptor = AVAssetWriterInputPixelBufferAdaptor(
             assetWriterInput: writerInput,
@@ -156,7 +161,7 @@ actor CombinedEffectsExporter {
                 let currentCenter = zoomState.center
                 
                 // Get cursor highlights for this frame
-                let highlights = activeHighlights(at: timeSeconds, cursorSession: cursorSession, videoSize: videoSize)
+                let highlights = activeHighlights(at: timeSeconds, cursorSession: cursorSession, videoSize: sourceVideoSize)
                 
                 // Process frame
                 if let imageBuffer = CMSampleBufferGetImageBuffer(sampleBuffer) {
@@ -171,7 +176,7 @@ actor CombinedEffectsExporter {
                             source: cgImage,
                             scale: currentScale,
                             center: currentCenter,
-                            outputSize: videoSize
+                            outputSize: outputVideoSize
                         ) ?? cgImage
                         
                         // Step 3: Apply cursor highlights if any
@@ -181,7 +186,8 @@ actor CombinedEffectsExporter {
                                 highlights,
                                 scale: currentScale,
                                 center: currentCenter,
-                                videoSize: videoSize
+                                sourceVideoSize: sourceVideoSize,
+                                outputVideoSize: outputVideoSize
                             )
                             
                             // AC-CE-01: Scale highlight radius when zoomed
@@ -258,14 +264,16 @@ actor CombinedEffectsExporter {
         _ highlights: [ActiveHighlight],
         scale: CGFloat,
         center: CGPoint,
-        videoSize: CGSize
+        sourceVideoSize: CGSize,
+        outputVideoSize: CGSize
     ) -> [ActiveHighlight] {
         guard scale > 1.0 else { return highlights }
         
         let cropRect = zoomRenderer.calculateCropRect(
             scale: scale,
             center: center,
-            sourceSize: videoSize
+            sourceSize: sourceVideoSize,
+            outputSize: outputVideoSize
         )
         
         return highlights.compactMap { highlight in
@@ -274,7 +282,7 @@ actor CombinedEffectsExporter {
             // cropRect uses CGImage coordinate system (Y=0 at bottom)
             let sourceX = highlight.position.x
             // Flip Y to match CGImage coordinate system
-            let sourceY = videoSize.height - highlight.position.y
+            let sourceY = sourceVideoSize.height - highlight.position.y
             
             // Check if position is within crop rect (in CGImage coordinates)
             guard cropRect.contains(CGPoint(x: sourceX, y: sourceY)) else {
@@ -287,8 +295,8 @@ actor CombinedEffectsExporter {
             
             // Convert back to our coordinate system (flip Y again for output)
             let adjustedPosition = CGPoint(
-                x: relativeX * videoSize.width,
-                y: (1.0 - relativeY) * videoSize.height
+                x: relativeX * outputVideoSize.width,
+                y: (1.0 - relativeY) * outputVideoSize.height
             )
             
             return ActiveHighlight(
@@ -344,7 +352,8 @@ actor CombinedEffectsExporter {
     /// - Keyboard activity triggers zoom out
     private nonisolated func createContinuousZoomTimeline(
         from session: CursorTrackSession,
-        keyboardEvents: [KeyboardEvent]
+        keyboardEvents: [KeyboardEvent],
+        referenceSize: CGSize
     ) -> ContinuousZoomTimeline {
         guard autoZoomSettings.isEnabled else {
             return ContinuousZoomTimeline(keyframes: [.idle(at: 0)])
@@ -356,7 +365,8 @@ actor CombinedEffectsExporter {
         return ContinuousZoomTimeline.from(
             cursorSession: session,
             keyboardEvents: keyboardEvents,
-            config: config
+            config: config,
+            referenceSize: referenceSize
         )
     }
 }

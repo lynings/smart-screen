@@ -170,10 +170,16 @@ final class ExportViewModel {
             autoZoomSettings: zoomSettings
         )
         
+        let targetSize = CGSize(
+            width: selectedPreset.resolution.width,
+            height: selectedPreset.resolution.height
+        )
+        
         try await exporter.export(
             videoURL: session.outputURL,
             cursorSession: cursorSession,
-            to: outputURL
+            to: outputURL,
+            renderSize: targetSize
         ) { [weak self] progress in
             Task { @MainActor in
                 self?.progress = progress

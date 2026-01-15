@@ -127,13 +127,21 @@ extension ContinuousZoomTimeline {
     static func from(
         cursorSession: CursorTrackSession,
         keyboardEvents: [KeyboardEvent] = [],
-        config: ContinuousZoomConfig = .default
+        config: ContinuousZoomConfig = .default,
+        referenceSize: CGSize = CGSize(width: 1920, height: 1080),
+        enableDiagnostics: Bool = false
     ) -> ContinuousZoomTimeline {
         let controller = ContinuousZoomController(config: config)
         let keyframes = controller.generateKeyframes(
             from: cursorSession,
-            keyboardEvents: keyboardEvents
+            keyboardEvents: keyboardEvents,
+            referenceSize: referenceSize
         )
+        
+        if enableDiagnostics {
+            ZoomDiagnostics.printDiagnosticReport(session: cursorSession, keyframes: keyframes)
+        }
+        
         return ContinuousZoomTimeline(keyframes: keyframes)
     }
 }
