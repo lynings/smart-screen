@@ -3,6 +3,7 @@ import Observation
 
 /// ViewModel for Auto Zoom settings and state management
 /// Auto Zoom 2.0: Continuous zoom with dynamic scale and smooth transitions
+/// v5.0: Spring physics, animation presets, pre-click buffer, continuous follow
 @Observable
 @MainActor
 final class AutoZoomViewModel {
@@ -25,6 +26,20 @@ final class AutoZoomViewModel {
     /// Zoom out when keyboard activity detected
     var zoomOutOnKeyboard: Bool = true
     
+    // MARK: - v5.0 Settings
+    
+    /// Animation style preset (Slow/Mellow/Quick/Rapid)
+    var animationStyle: AnimationStyle = .mellow
+    
+    /// Enable pre-click buffer (start zoom before click)
+    var enablePreClickBuffer: Bool = true
+    
+    /// Pre-click buffer duration in seconds
+    var preClickBufferDuration: TimeInterval = 0.15
+    
+    /// Enable continuous cursor following during zoomed state
+    var enableContinuousFollow: Bool = true
+    
     // MARK: - Computed
     
     var settings: AutoZoomSettings {
@@ -35,7 +50,11 @@ final class AutoZoomViewModel {
             idleTimeout: idleTimeout,
             dynamicZoomEnabled: dynamicZoomEnabled,
             zoomOutOnKeyboard: zoomOutOnKeyboard,
-            cursorScale: cursorScale
+            cursorScale: cursorScale,
+            animationStyle: animationStyle,
+            enablePreClickBuffer: enablePreClickBuffer,
+            preClickBufferDuration: preClickBufferDuration,
+            enableContinuousFollow: enableContinuousFollow
         )
     }
     
@@ -56,6 +75,10 @@ final class AutoZoomViewModel {
         zoomLevel = settings.zoomLevel
         idleTimeout = settings.idleTimeout
         easing = settings.easing
+        animationStyle = settings.animationStyle
+        enablePreClickBuffer = settings.enablePreClickBuffer
+        preClickBufferDuration = settings.preClickBufferDuration
+        enableContinuousFollow = settings.enableContinuousFollow
     }
     
     // MARK: - Preset Type
@@ -69,9 +92,9 @@ final class AutoZoomViewModel {
         
         var description: String {
             switch self {
-            case .subtle: return "轻柔 - 1.5x 缩放，4秒超时"
-            case .normal: return "标准 - 2.0x 缩放，3秒超时"
-            case .dramatic: return "强烈 - 2.5x 缩放，2.5秒超时"
+            case .subtle: return "轻柔 - 1.5x 缩放，慢速动画"
+            case .normal: return "标准 - 2.0x 缩放，自然动画"
+            case .dramatic: return "强烈 - 2.5x 缩放，快速动画"
             }
         }
     }

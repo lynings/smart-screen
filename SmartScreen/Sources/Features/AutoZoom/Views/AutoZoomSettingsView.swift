@@ -104,17 +104,89 @@ struct AutoZoomSettingsView: View {
                         .font(.subheadline)
                 }
                 
-                // Easing
-                Picker("缓动曲线", selection: $viewModel.easing) {
-                    ForEach(EasingCurve.allCases, id: \.self) { curve in
-                        Text(curve.displayName).tag(curve)
+                Divider()
+                
+                // Animation Style (New in v5.0)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("动画风格")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    
+                    Picker("", selection: $viewModel.animationStyle) {
+                        ForEach(AnimationStyle.allCases) { style in
+                            Text(style.displayName).tag(style)
+                        }
+                    }
+                    .pickerStyle(.segmented)
+                    
+                    Text(viewModel.animationStyle.description)
+                        .font(.caption2)
+                        .foregroundStyle(.tertiary)
+                }
+                
+                Divider()
+                
+                // UX Enhancements (New in v5.0)
+                VStack(alignment: .leading, spacing: 8) {
+                    Text("体验增强")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                    
+                    // Pre-click Buffer
+                    Toggle(isOn: $viewModel.enablePreClickBuffer) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("预测性缓冲")
+                                .font(.subheadline)
+                            Text("在点击前开始缩放，让观众看到点击动作")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
+                    }
+                    
+                    // Continuous Follow
+                    Toggle(isOn: $viewModel.enableContinuousFollow) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("持续跟随")
+                                .font(.subheadline)
+                            Text("缩放状态下持续跟随光标移动")
+                                .font(.caption2)
+                                .foregroundStyle(.tertiary)
+                        }
                     }
                 }
-                .pickerStyle(.segmented)
+                
+                Divider()
+                
+                // Advanced Settings
+                DisclosureGroup("高级设置") {
+                    VStack(alignment: .leading, spacing: 12) {
+                        // Dynamic Zoom Toggle
+                        Toggle(isOn: $viewModel.dynamicZoomEnabled) {
+                            Text("动态缩放（边缘更大）")
+                                .font(.subheadline)
+                        }
+                        
+                        // Keyboard Zoom Out Toggle
+                        Toggle(isOn: $viewModel.zoomOutOnKeyboard) {
+                            Text("键盘输入时缩小")
+                                .font(.subheadline)
+                        }
+                        
+                        // Legacy Easing (hidden by default, animation style overrides)
+                        Picker("缓动曲线", selection: $viewModel.easing) {
+                            ForEach(EasingCurve.allCases, id: \.self) { curve in
+                                Text(curve.displayName).tag(curve)
+                            }
+                        }
+                        .pickerStyle(.segmented)
+                    }
+                    .padding(.top, 8)
+                }
+                .font(.subheadline)
             }
         }
         .padding()
-        .frame(width: 300)
+        .frame(width: 320)
     }
     
     private func presetBackground(for preset: AutoZoomViewModel.Preset) -> some ShapeStyle {

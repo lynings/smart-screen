@@ -37,13 +37,15 @@ final class Phase1IntegrationTests: XCTestCase {
         // given
         let config = ContinuousZoomConfig.default
         
-        // when & then
-        XCTAssertEqual(config.clickMergeTime, 0.35, "Should use new merge time")
-        XCTAssertEqual(config.clickMergeDistancePixels, 120, "Should use new merge distance")
-        XCTAssertEqual(config.holdBase, 0.6, "Should use new base hold duration")
-        XCTAssertEqual(config.holdMin, 0.35, "Should have minimum hold duration")
-        XCTAssertEqual(config.holdMax, 1.5, "Should have maximum hold duration")
-        XCTAssertEqual(config.holdExtensionPerEvent, 0.4, "Should have hold extension per event")
+        // when & then - Updated for v6.0 smoother UX
+        XCTAssertEqual(config.clickMergeTime, 0.8, "Should use extended merge time for better click grouping")
+        XCTAssertEqual(config.clickMergeDistancePixels, 300, "Should use larger merge distance")
+        XCTAssertEqual(config.holdBase, 1.2, "Should use longer base hold to reduce flicker")
+        XCTAssertEqual(config.holdMin, 0.8, "Should have extended minimum hold for stability")
+        XCTAssertEqual(config.holdMax, 3.0, "Should have maximum hold duration")
+        XCTAssertEqual(config.holdExtensionPerEvent, 0.5, "Should have hold extension per event")
+        XCTAssertEqual(config.preClickBuffer, 0.15, "Should have pre-click buffer")
+        XCTAssertTrue(config.preClickBufferEnabled, "Pre-click buffer should be enabled by default")
     }
     
     // MARK: - should_integrate_attention_scorer_with_event_aggregator

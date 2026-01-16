@@ -66,6 +66,24 @@ struct AutoZoomSettings: Codable, Equatable {
     /// Scale factor for cursor/highlight during zoom (1.0x - 3.0x, default 1.6x)
     var cursorScale: CGFloat
     
+    // MARK: - Animation Style (New in v5.0)
+    
+    /// Animation style preset (Slow/Mellow/Quick/Rapid)
+    var animationStyle: AnimationStyle
+    
+    // MARK: - Pre-click Buffer (New in v5.0)
+    
+    /// Enable pre-click buffer (start zoom before click for better UX)
+    var enablePreClickBuffer: Bool
+    
+    /// Pre-click buffer duration in seconds
+    var preClickBufferDuration: TimeInterval
+    
+    // MARK: - Follow Mode (New in v5.0)
+    
+    /// Enable continuous cursor following during zoomed state
+    var enableContinuousFollow: Bool
+    
     // MARK: - Legacy Compatibility
     
     /// Legacy property for backward compatibility
@@ -102,7 +120,11 @@ struct AutoZoomSettings: Codable, Equatable {
         debounceAreaThreshold: CGFloat = 0.15,
         debounceTimeWindow: TimeInterval = 0.5,
         zoomOutOnKeyboard: Bool = true,
-        cursorScale: CGFloat = 1.6
+        cursorScale: CGFloat = 1.6,
+        animationStyle: AnimationStyle = .mellow,
+        enablePreClickBuffer: Bool = true,
+        preClickBufferDuration: TimeInterval = 0.15,
+        enableContinuousFollow: Bool = true
     ) {
         self.isEnabled = isEnabled
         self.zoomLevel = Self.clamp(zoomLevel, to: Self.zoomLevelRange)
@@ -117,6 +139,10 @@ struct AutoZoomSettings: Codable, Equatable {
         self.debounceTimeWindow = debounceTimeWindow
         self.zoomOutOnKeyboard = zoomOutOnKeyboard
         self.cursorScale = Self.clamp(cursorScale, to: Self.cursorScaleRange)
+        self.animationStyle = animationStyle
+        self.enablePreClickBuffer = enablePreClickBuffer
+        self.preClickBufferDuration = preClickBufferDuration
+        self.enableContinuousFollow = enableContinuousFollow
     }
     
     // MARK: - Presets
@@ -128,7 +154,8 @@ struct AutoZoomSettings: Codable, Equatable {
         zoomInDuration: 0.4,
         zoomOutDuration: 0.5,
         panDuration: 0.3,
-        idleTimeout: 4.0
+        idleTimeout: 4.0,
+        animationStyle: .slow
     )
     
     static let normal = AutoZoomSettings(
@@ -136,7 +163,8 @@ struct AutoZoomSettings: Codable, Equatable {
         zoomInDuration: 0.3,
         zoomOutDuration: 0.4,
         panDuration: 0.3,
-        idleTimeout: 3.0
+        idleTimeout: 3.0,
+        animationStyle: .mellow
     )
     
     static let dramatic = AutoZoomSettings(
@@ -144,23 +172,31 @@ struct AutoZoomSettings: Codable, Equatable {
         zoomInDuration: 0.25,
         zoomOutDuration: 0.35,
         panDuration: 0.25,
-        idleTimeout: 2.5
+        idleTimeout: 2.5,
+        animationStyle: .quick
     )
     
     // MARK: - Config Conversion
     
     /// Convert to ContinuousZoomConfig for the controller
     func toContinuousZoomConfig() -> ContinuousZoomConfig {
-        ContinuousZoomConfig(
+        // Use animation style durations if available
+        let effectiveZoomInDuration = animationStyle.zoomInDuration
+        let effectiveZoomOutDuration = animationStyle.zoomOutDuration
+        let effectivePanDuration = animationStyle.panDuration
+        
+        return ContinuousZoomConfig(
             baseZoomScale: zoomLevel,
-            zoomInDuration: zoomInDuration,
-            zoomOutDuration: zoomOutDuration,
-            panDuration: panDuration,
+            zoomInDuration: effectiveZoomInDuration,
+            zoomOutDuration: effectiveZoomOutDuration,
+            panDuration: effectivePanDuration,
             idleTimeout: idleTimeout,
             largeDistanceThreshold: largeDistanceThreshold,
             debounceAreaThreshold: debounceAreaThreshold,
             debounceTimeWindow: debounceTimeWindow,
-            easing: easing
+            easing: animationStyle.legacyEasing,
+            preClickBuffer: preClickBufferDuration,
+            preClickBufferEnabled: enablePreClickBuffer
         )
     }
     

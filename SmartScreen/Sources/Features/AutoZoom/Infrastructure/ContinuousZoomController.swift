@@ -72,35 +72,44 @@ struct ContinuousZoomConfig {
     /// Maximum time gap allowed between follow keyframes after simplification
     let followMaxKeyframeGap: TimeInterval
     
+    /// Pre-click buffer duration (seconds) - start zoom this much before the click
+    /// This allows viewers to see the click action happening
+    let preClickBuffer: TimeInterval
+    
+    /// Whether pre-click buffer is enabled
+    let preClickBufferEnabled: Bool
+    
     static let `default` = ContinuousZoomConfig(
         baseZoomScale: 2.0,
-        zoomInDuration: 0.3,
-        holdMin: 0.35,
-        holdBase: 0.6,
-        holdMax: 1.5,
-        holdExtensionPerEvent: 0.4,
-        zoomOutDuration: 0.4,
-        panDuration: 0.3,
-        idleTimeout: 3.0,
+        zoomInDuration: 0.35,      // Slightly longer for smoother zoom in
+        holdMin: 0.8,              // Increased to prevent rapid zoom out
+        holdBase: 1.2,             // Longer base hold to reduce flicker
+        holdMax: 3.0,              // Allow longer holds for stability
+        holdExtensionPerEvent: 0.5,// More extension per click
+        zoomOutDuration: 0.5,      // Slightly longer for smoother zoom out
+        panDuration: 0.35,
+        idleTimeout: 2.5,          // Slightly shorter idle timeout
         largeDistanceThreshold: 0.3,
-        activeSessionTimeout: 1.0,
+        activeSessionTimeout: 1.5, // Longer session timeout
         debounceAreaThreshold: 0.15,
-        debounceTimeWindow: 0.5,
+        debounceTimeWindow: 0.8,   // Longer debounce window
         easing: .easeInOut,
-        clickMergeTime: 0.35,
-        clickMergeDistancePixels: 120,
-        followKeyframeInterval: 1.0 / 15.0,
+        clickMergeTime: 0.8,       // Longer merge window to group rapid clicks
+        clickMergeDistancePixels: 300,  // Larger merge area
+        followKeyframeInterval: 1.0 / 30.0,  // 30fps for smoother animation
         oneEuroMinCutoff: 1.0,
         oneEuroBeta: 0.007,
         oneEuroDCutoff: 1.0,
         rdpEpsilon: 0.004,
-        followMaxKeyframeGap: 0.4
+        followMaxKeyframeGap: 0.2, // Smaller gap for more keyframes
+        preClickBuffer: 0.15,
+        preClickBufferEnabled: true
     )
 
     init(
         baseZoomScale: CGFloat = 2.0,
         zoomInDuration: TimeInterval = 0.3,
-        holdMin: TimeInterval = 0.35,
+        holdMin: TimeInterval = 0.5,           // Increased for better stability
         holdBase: TimeInterval = 0.6,
         holdMax: TimeInterval = 1.5,
         holdExtensionPerEvent: TimeInterval = 0.4,
@@ -112,14 +121,16 @@ struct ContinuousZoomConfig {
         debounceAreaThreshold: CGFloat = 0.15,
         debounceTimeWindow: TimeInterval = 0.5,
         easing: EasingCurve = .easeInOut,
-        clickMergeTime: TimeInterval = 0.35,
-        clickMergeDistancePixels: CGFloat = 120,
+        clickMergeTime: TimeInterval = 0.5,    // Increased for better click grouping
+        clickMergeDistancePixels: CGFloat = 200,  // Increased for larger merge area
         followKeyframeInterval: TimeInterval = 1.0 / 15.0,
         oneEuroMinCutoff: Double = 1.0,
         oneEuroBeta: Double = 0.007,
         oneEuroDCutoff: Double = 1.0,
         rdpEpsilon: CGFloat = 0.004,
-        followMaxKeyframeGap: TimeInterval = 0.4
+        followMaxKeyframeGap: TimeInterval = 0.4,
+        preClickBuffer: TimeInterval = 0.15,
+        preClickBufferEnabled: Bool = true
     ) {
         self.baseZoomScale = baseZoomScale
         self.zoomInDuration = zoomInDuration
@@ -143,6 +154,8 @@ struct ContinuousZoomConfig {
         self.oneEuroDCutoff = oneEuroDCutoff
         self.rdpEpsilon = rdpEpsilon
         self.followMaxKeyframeGap = followMaxKeyframeGap
+        self.preClickBuffer = preClickBuffer
+        self.preClickBufferEnabled = preClickBufferEnabled
     }
 }
 
@@ -156,18 +169,28 @@ enum ZoomControlState: Equatable {
     case transitioning(from: CGPoint, to: CGPoint)
 }
 
-/// Merged click event with original event count for Hold duration calculation
+/// Merged click event with first/last positions for smooth transitions
 struct MergedClick {
-    let position: CGPoint
-    let timestamp: TimeInterval
-    let eventCount: Int  // Number of original clicks merged into this one
+    let position: CGPoint           // Primary position (first click)
+    let timestamp: TimeInterval     // Time of first click
+    let eventCount: Int             // Number of original clicks merged
     let type: ClickType
+    
+    // For handling rapid clicks: track first and last positions
+    let firstPosition: CGPoint
+    let lastPosition: CGPoint
+    let lastTimestamp: TimeInterval
+    let internalDistance: CGFloat   // Distance between first and last click
     
     init(from click: ClickEvent, eventCount: Int = 1) {
         self.position = click.position
         self.timestamp = click.timestamp
         self.eventCount = eventCount
         self.type = click.type
+        self.firstPosition = click.position
+        self.lastPosition = click.position
+        self.lastTimestamp = click.timestamp
+        self.internalDistance = 0
     }
     
     init(from group: [ClickEvent]) {
@@ -176,26 +199,39 @@ struct MergedClick {
             self.timestamp = 0
             self.eventCount = 0
             self.type = .leftClick
+            self.firstPosition = .zero
+            self.lastPosition = .zero
+            self.lastTimestamp = 0
+            self.internalDistance = 0
             return
         }
         
-        if group.count == 1 {
+        let last = group.last!
+        
+        // Use FIRST position as primary (user's initial intent)
             self.position = first.position
-            self.timestamp = first.timestamp
-            self.eventCount = 1
-            self.type = first.type
-        } else {
-            let centroid = group
-                .map(\.position)
-                .reduce(CGPoint.zero) { partial, p in
-                    CGPoint(x: partial.x + p.x, y: partial.y + p.y)
-                }
-            let count = CGFloat(group.count)
-            self.position = CGPoint(x: centroid.x / count, y: centroid.y / count)
             self.timestamp = first.timestamp
             self.eventCount = group.count
             self.type = first.type
-        }
+        
+        // Track first and last for transition decisions
+        self.firstPosition = first.position
+        self.lastPosition = last.position
+        self.lastTimestamp = last.timestamp
+        self.internalDistance = hypot(
+            last.position.x - first.position.x,
+            last.position.y - first.position.y
+        )
+    }
+    
+    /// Duration of the rapid click sequence
+    var sequenceDuration: TimeInterval {
+        lastTimestamp - timestamp
+    }
+    
+    /// Whether this merged click spans a significant distance (needs smooth transition)
+    var needsSmoothTransition: Bool {
+        internalDistance > 0.05 && eventCount > 1  // >5% screen distance with multiple clicks
     }
 }
 
@@ -231,9 +267,13 @@ final class ContinuousZoomController {
         
         var currentState: ZoomControlState = .idle
         var lastZoomCenter: CGPoint?
+        var lastZoomScale: CGFloat = 1.0  // Track current zoom scale for interruption
         var lastActivityTime: TimeInterval = 0
         var currentHoldEndTime: TimeInterval = 0  // Track when current Hold phase ends
         var currentHoldStartTime: TimeInterval = 0  // Track when current Hold phase starts
+        
+        // Track pending zoom out for interruption handling
+        var pendingZoomOut: (startTime: TimeInterval, endTime: TimeInterval, fromCenter: CGPoint)? = nil
         
         // Process each click event
         for (index, click) in mergedClicks.enumerated() {
@@ -243,18 +283,78 @@ final class ContinuousZoomController {
             // 1. Check for keyboard activity - zoom out if typing
             if hasKeyboardActivity(at: clickTime, events: keyboardEvents) {
                 if case .zoomed = currentState, let center = lastZoomCenter {
+                    let zoomOutStart = clickTime - 0.1
                     keyframes.append(contentsOf: generateZoomOut(
                         from: center,
-                        startTime: clickTime - 0.1,
+                        startTime: zoomOutStart,
                         duration: config.zoomOutDuration
                     ))
+                    pendingZoomOut = (zoomOutStart, zoomOutStart + config.zoomOutDuration, center)
                     currentState = .idle
                     lastZoomCenter = nil
                 }
                 continue
             }
             
-            // 2. Check for idle timeout - zoom out if no activity for 3 seconds
+            // 2. Check if click occurs during a pending zoom out - interrupt and redirect
+            if let zoomOut = pendingZoomOut,
+               clickTime >= zoomOut.startTime && clickTime <= zoomOut.endTime {
+                // Click during zoom out - interrupt and zoom in to new position
+                // Remove the zoom out keyframes that haven't started yet
+                keyframes = keyframes.filter { $0.time < clickTime }
+                
+                // Calculate current scale at interruption point using spring physics
+                let zoomOutProgress = (clickTime - zoomOut.startTime) / config.zoomOutDuration
+                let spring = SpringAnimation.default
+                let currentScale = spring.value(
+                    at: zoomOutProgress * spring.settlingTime,
+                    from: lastZoomScale,
+                    to: 1.0
+                )
+                
+                // Calculate current center (interpolated between old center and screen center)
+                let currentCenter = CGPoint(
+                    x: zoomOut.fromCenter.x + (0.5 - zoomOut.fromCenter.x) * CGFloat(zoomOutProgress),
+                    y: zoomOut.fromCenter.y + (0.5 - zoomOut.fromCenter.y) * CGFloat(zoomOutProgress)
+                )
+                
+                // Add interruption keyframe at current position
+                keyframes.append(ZoomKeyframe(
+                    time: clickTime,
+                    scale: currentScale,
+                    center: currentCenter,
+                    easing: .easeOut
+                ))
+                
+                // Zoom in to new click position with spring animation
+                let newScale = dynamicZoom.zoomScaleWithCornerBoost(at: clickPosition)
+                let constrainedPosition = constrainCenterForCursor(clickPosition, cursorPosition: clickPosition, at: newScale)
+                
+                keyframes.append(contentsOf: generateSpringZoomIn(
+                    from: currentCenter,
+                    fromScale: currentScale,
+                    to: constrainedPosition,
+                    toScale: newScale,
+                    startTime: clickTime,
+                    duration: config.zoomInDuration
+                ))
+                
+                currentState = .zoomed(at: constrainedPosition)
+                lastZoomCenter = constrainedPosition
+                lastZoomScale = newScale
+                currentHoldStartTime = clickTime + config.zoomInDuration
+                currentHoldEndTime = currentHoldStartTime + config.holdBase
+                pendingZoomOut = nil
+                lastActivityTime = clickTime
+                continue
+            }
+            
+            // Clear pending zoom out if click is after it
+            if let zoomOut = pendingZoomOut, clickTime > zoomOut.endTime {
+                pendingZoomOut = nil
+            }
+            
+            // 3. Check for idle timeout - zoom out if no activity for 3 seconds
             // Consider keyboard activity as activity to prevent premature zoom out
             // Look at ALL keyboard events, not just those before current click
             let lastKeyboardBeforeClick = keyboardEvents.filter { $0.timestamp <= clickTime }.last?.timestamp ?? 0
@@ -262,28 +362,38 @@ final class ContinuousZoomController {
             
             if clickTime - effectiveLastActivity > config.idleTimeout {
                 if case .zoomed = currentState, let center = lastZoomCenter {
+                    let zoomOutStart = effectiveLastActivity + config.idleTimeout
                     keyframes.append(contentsOf: generateZoomOut(
                         from: center,
-                        startTime: effectiveLastActivity + config.idleTimeout,
+                        startTime: zoomOutStart,
                         duration: config.zoomOutDuration
                     ))
+                    pendingZoomOut = (zoomOutStart, zoomOutStart + config.zoomOutDuration, center)
                     currentState = .idle
                     lastZoomCenter = nil
                 }
             }
             
-            // 3. Determine transition type based on current state
+            // 4. Determine transition type based on current state
             switch currentState {
             case .idle:
-                // Simply zoom in to click position
-                let zoomScale = dynamicZoom.zoomScaleWithCornerBoost(at: clickPosition)
-                let constrainedPosition = constrainCenter(clickPosition, at: zoomScale)
+                // For rapid clicks with distance, use first position and smoothly pan to last
+                let primaryPosition = click.firstPosition
+                let finalPosition = click.lastPosition
                 
-                // Calculate dynamic hold duration based on event count
-                // baseHold + (eventCount - 1) * extensionPerEvent, capped at holdMax
+                let zoomScale = dynamicZoom.zoomScaleWithCornerBoost(at: primaryPosition)
+                lastZoomScale = zoomScale
+                // Use cursor-aware constraint to prevent occlusion at edges
+                let constrainedPosition = constrainCenterForCursor(primaryPosition, cursorPosition: primaryPosition, at: zoomScale)
+                
+                // Calculate dynamic hold duration based on event count and distance
+                // More clicks = longer hold, larger distance = adjusted transition speed
                 let baseHold = config.holdBase
                 let holdExtension = TimeInterval(click.eventCount - 1) * config.holdExtensionPerEvent
-                let uncappedHold = baseHold + holdExtension
+                
+                // If rapid clicks span distance, extend hold to allow smooth pan
+                let distanceExtension: TimeInterval = click.needsSmoothTransition ? click.sequenceDuration + 0.3 : 0
+                let uncappedHold = baseHold + holdExtension + distanceExtension
                 let calculatedHold: TimeInterval = min(uncappedHold, config.holdMax)
                 let baseHoldEndTime = clickTime + config.zoomInDuration + calculatedHold
                 
@@ -306,10 +416,16 @@ final class ContinuousZoomController {
                 if shouldFollow {
                     // Enter Follow Mode: zoom in, then follow cursor immediately
                     // Don't add Hold phase - go straight from Ease In to Follow
+                    
+                    // Apply pre-click buffer: start zoom before the click
+                    let zoomStartTime = config.preClickBufferEnabled 
+                        ? max(0, clickTime - config.preClickBuffer) 
+                        : clickTime
+                    
                     keyframes.append(contentsOf: generateZoomIn(
                         to: clickPosition,
                         scale: zoomScale,
-                        startTime: clickTime,
+                        startTime: zoomStartTime,
                         duration: config.zoomInDuration,
                         holdUntil: nil  // No hold - transition directly to follow
                     ))
@@ -328,24 +444,105 @@ final class ContinuousZoomController {
                     
                     // Update state to following
                     let finalPosition = moveEvents.last?.position ?? constrainedPosition
-                    let finalConstrained = constrainCenter(finalPosition, at: zoomScale)
+                    let finalConstrained = constrainCenterForCursor(finalPosition, cursorPosition: finalPosition, at: zoomScale)
                     currentState = .following(at: finalConstrained)
                     lastZoomCenter = finalConstrained
                     currentHoldStartTime = followUntil
                     currentHoldEndTime = followUntil + calculatedHold
                 } else {
                     // Normal zoom in with hold
+                    
+                    // Apply pre-click buffer: start zoom before the click
+                    let zoomStartTime = config.preClickBufferEnabled 
+                        ? max(0, clickTime - config.preClickBuffer) 
+                        : clickTime
+                    
+                    // Check for any movement during the Hold period that might trigger late follow mode
+                    let holdStartTime = zoomStartTime + config.zoomInDuration
+                    let (lateFollow, lateFollowUntil, lateMoveEvents) = detectLateFollowPattern(
+                        during: holdStartTime...holdEndTime,
+                        startPosition: constrainedPosition,
+                        from: cursorSession,
+                        nextClickTime: nextClickTime
+                    )
+                    
+                    if lateFollow && !lateMoveEvents.isEmpty {
+                        // Late follow detected during Hold - generate zoom in without hold, then follow
                     keyframes.append(contentsOf: generateZoomIn(
                         to: clickPosition,
                         scale: zoomScale,
-                        startTime: clickTime,
+                            startTime: zoomStartTime,
                         duration: config.zoomInDuration,
-                        holdUntil: holdEndTime
-                    ))
+                            holdUntil: nil  // No static hold - go to follow
+                        ))
+                        
+                        // Generate follow keyframes
+                        keyframes.append(contentsOf: generateFollowKeyframes(
+                            fromPosition: constrainedPosition,
+                            scale: zoomScale,
+                            startTime: holdStartTime,
+                            endTime: lateFollowUntil,
+                            moveEvents: lateMoveEvents,
+                            referenceSize: referenceSize
+                        ))
+                        
+                        let finalPosition = lateMoveEvents.last?.position ?? constrainedPosition
+                        let finalConstrained = constrainCenterForCursor(finalPosition, cursorPosition: finalPosition, at: zoomScale)
+                        currentState = .following(at: finalConstrained)
+                        lastZoomCenter = finalConstrained
+                        currentHoldStartTime = lateFollowUntil
+                        currentHoldEndTime = lateFollowUntil + calculatedHold
+                    } else {
+                        // Standard zoom in with static hold
+                        keyframes.append(contentsOf: generateZoomIn(
+                            to: primaryPosition,
+                            scale: zoomScale,
+                            startTime: zoomStartTime,
+                            duration: config.zoomInDuration,
+                            holdUntil: click.needsSmoothTransition ? nil : holdEndTime
+                        ))
+                        
+                        // If rapid clicks span a distance, smoothly pan from first to last position
+                        if click.needsSmoothTransition {
+                            let panStartTime = zoomStartTime + config.zoomInDuration
+                            let panDuration = max(0.2, click.sequenceDuration)  // At least 0.2s for smooth pan
+                            
+                            let constrainedFinal = constrainCenterForCursor(finalPosition, cursorPosition: finalPosition, at: zoomScale)
+                            keyframes.append(contentsOf: generateSmoothTransition(
+                                from: constrainedPosition,
+                                to: constrainedFinal,
+                                fromScale: zoomScale,
+                                toScale: zoomScale,  // Keep same zoom level
+                                startTime: panStartTime,
+                                duration: panDuration
+                            ))
+                            
+                            // Add hold after pan completes
+                            let holdStart = panStartTime + panDuration
+                            keyframes.append(ZoomKeyframe(
+                                time: holdStart,
+                                scale: zoomScale,
+                                center: constrainedFinal,
+                                easing: .linear
+                            ))
+                            keyframes.append(ZoomKeyframe(
+                                time: holdEndTime,
+                                scale: zoomScale,
+                                center: constrainedFinal,
+                                easing: .linear
+                            ))
+                            
+                            currentState = .zoomed(at: constrainedFinal)
+                            lastZoomCenter = constrainedFinal
+                            currentHoldStartTime = holdStart
+                            currentHoldEndTime = holdEndTime
+                        } else {
                     currentState = .zoomed(at: constrainedPosition)
-                    lastZoomCenter = constrainedPosition  // Use constrained position, not original click position
-                    currentHoldStartTime = clickTime + config.zoomInDuration  // Hold starts after Ease In
-                    currentHoldEndTime = holdEndTime  // Remember when Hold ends
+                            lastZoomCenter = constrainedPosition
+                            currentHoldStartTime = holdStartTime
+                            currentHoldEndTime = holdEndTime
+                        }
+                    }
                 }
                 
             case .zoomed(let currentCenter), .following(let currentCenter):
@@ -405,9 +602,9 @@ final class ContinuousZoomController {
                         startTime: transitionStartTime,  // Wait for Hold to finish
                         currentScale: dynamicZoom.zoomScaleWithCornerBoost(at: currentCenter)
                     ))
-                    // largeDistanceTransition internally constrains the position, extract it from generated keyframes
+                    // Use cursor-aware constraint to prevent occlusion at edges
                     let newScale = dynamicZoom.zoomScaleWithCornerBoost(at: clickPosition)
-                    let constrainedPosition = constrainCenter(clickPosition, at: newScale)
+                    let constrainedPosition = constrainCenterForCursor(clickPosition, cursorPosition: clickPosition, at: newScale)
                     currentState = .zoomed(at: constrainedPosition)
                     lastZoomCenter = constrainedPosition  // Use constrained position
                     
@@ -421,7 +618,8 @@ final class ContinuousZoomController {
                 } else {
                     // Small distance: smooth pan transition
                     let newScale = dynamicZoom.zoomScaleWithCornerBoost(at: clickPosition)
-                    let constrainedPosition = constrainCenter(clickPosition, at: newScale)
+                    // Use cursor-aware constraint to prevent occlusion at edges
+                    let constrainedPosition = constrainCenterForCursor(clickPosition, cursorPosition: clickPosition, at: newScale)
                     keyframes.append(contentsOf: generateSmoothTransition(
                         from: currentCenter,
                         to: clickPosition,
@@ -484,9 +682,70 @@ final class ContinuousZoomController {
         return deduplicateKeyframes(keyframes)
     }
     
-    // MARK: - Click-Then-Move Pattern Detection
+    // MARK: - Movement Pattern Detection
     
-    /// Detects if there's significant cursor movement immediately after a click
+    /// Detects movement during Hold phase that should trigger follow mode
+    /// This catches cases where user starts moving after the initial detection window
+    private func detectLateFollowPattern(
+        during holdPeriod: ClosedRange<TimeInterval>,
+        startPosition: CGPoint,
+        from session: CursorTrackSession,
+        nextClickTime: TimeInterval?
+    ) -> (shouldFollow: Bool, followUntil: TimeInterval, moveEvents: [MouseEvent]) {
+        let minMovementThreshold: CGFloat = 0.03  // 3% screen movement to trigger
+        let followExtension: TimeInterval = 1.5   // Extend follow after last movement
+        
+        // Find move events during Hold period
+        let relevantMoves = session.events.filter { event in
+            guard event.type == .move else { return false }
+            guard holdPeriod.contains(event.timestamp) else { return false }
+            
+            // Stop if next click arrives
+            if let nextClick = nextClickTime, event.timestamp >= nextClick {
+                return false
+            }
+            
+            return true
+        }
+        
+        guard !relevantMoves.isEmpty else {
+            return (false, 0, [])
+        }
+        
+        // Check for significant movement from start position
+        var hasSignificantMovement = false
+        var maxDistanceEvent: MouseEvent?
+        var maxDistance: CGFloat = 0
+        
+        for event in relevantMoves {
+            let distance = hypot(event.position.x - startPosition.x,
+                               event.position.y - startPosition.y)
+            if distance > maxDistance {
+                maxDistance = distance
+                maxDistanceEvent = event
+            }
+            if distance >= minMovementThreshold {
+                hasSignificantMovement = true
+            }
+        }
+        
+        guard hasSignificantMovement else {
+            return (false, 0, [])
+        }
+        
+        // Calculate follow until time based on movement pattern
+        let lastMoveTime = relevantMoves.last?.timestamp ?? holdPeriod.lowerBound
+        var followUntil = lastMoveTime + followExtension
+        
+        // Cap by next click if present
+        if let nextClick = nextClickTime {
+            followUntil = min(followUntil, nextClick - 0.1)
+        }
+        
+        return (true, followUntil, relevantMoves)
+    }
+    
+    /// Detects if there's significant cursor movement after a click (e.g., menu navigation)
     /// Returns (shouldFollow, targetTime, moveEvents) if pattern detected
     private func detectClickThenMovePattern(
         afterClick clickTime: TimeInterval,
@@ -494,12 +753,13 @@ final class ContinuousZoomController {
         from session: CursorTrackSession,
         nextClickTime: TimeInterval?
     ) -> (shouldFollow: Bool, followUntil: TimeInterval, moveEvents: [MouseEvent]) {
-        // Thresholds for pattern detection
-        let detectionWindow: TimeInterval = 0.3  // Must start moving within 0.3s
-        let minMovementThreshold: CGFloat = 0.05  // Min 5% screen movement
-        let followTimeLimit: TimeInterval = 2.0   // Max follow duration
+        // Relaxed thresholds for better menu/submenu detection
+        let detectionWindow: TimeInterval = 0.8      // Extended: 0.3 -> 0.8s for slow menu interactions
+        let minMovementThreshold: CGFloat = 0.02     // Reduced: 0.05 -> 0.02 (2% screen movement)
+        let followTimeLimit: TimeInterval = 5.0      // Extended: 2.0 -> 5.0s for complex menu hierarchies
+        let idleThreshold: TimeInterval = 0.8        // If no movement for 0.8s, consider cursor stopped
         
-        // Find move events after this click
+        // Find all move events after this click
         let relevantMoves = session.events.filter { event in
             guard event.type == .move else { return false }
             guard event.timestamp > clickTime else { return false }
@@ -513,12 +773,11 @@ final class ContinuousZoomController {
             return event.timestamp <= clickTime + followTimeLimit
         }
         
-        
         guard !relevantMoves.isEmpty else {
             return (false, 0, [])
         }
         
-        // Check if first significant movement happens within detection window
+        // Check if any significant movement happens within detection window
         var firstSignificantMove: MouseEvent?
         for event in relevantMoves {
             let distance = hypot(event.position.x - clickPosition.x, 
@@ -534,17 +793,48 @@ final class ContinuousZoomController {
             return (false, 0, [])
         }
         
-        // Pattern detected! Determine follow duration
-        // Follow until: cursor stops, new click, or time limit
-        let lastMoveTime = relevantMoves.last?.timestamp ?? clickTime
-        let followUntil = min(lastMoveTime + 0.5, clickTime + followTimeLimit)
+        // Pattern detected! Determine follow duration dynamically
+        // Follow until: cursor becomes idle, new click, or time limit
+        var followUntil = clickTime + followTimeLimit
+        
+        // Find the last active moment (when cursor was still moving)
+        var lastActiveTime = firstMove.timestamp
+        var lastPosition = firstMove.position
+        
+        for event in relevantMoves {
+            if event.timestamp <= firstMove.timestamp { continue }
+            
+            let timeSinceLast = event.timestamp - lastActiveTime
+            let distance = hypot(event.position.x - lastPosition.x,
+                               event.position.y - lastPosition.y)
+            
+            // If cursor moved significantly, update last active time
+            if distance > 0.005 {  // Small movement threshold
+                lastActiveTime = event.timestamp
+                lastPosition = event.position
+            } else if timeSinceLast > idleThreshold {
+                // Cursor has been idle for too long
+                followUntil = lastActiveTime + 0.3  // Grace period after last movement
+                break
+            }
+        }
+        
+        // Ensure we have at least some follow time after the last movement
+        if let lastMove = relevantMoves.last {
+            let dynamicEnd = lastMove.timestamp + 0.5
+            followUntil = min(followUntil, dynamicEnd)
+        }
+        
+        // Clamp to reasonable bounds
+        followUntil = max(followUntil, clickTime + config.zoomInDuration + config.holdMin)
         
         return (true, followUntil, relevantMoves)
     }
     
     // MARK: - Follow Mode Keyframes
     
-    /// Generates smooth follow keyframes for Click-Then-Move pattern
+    /// Generates smooth follow keyframes using spring physics
+    /// Camera follows cursor with natural spring-based motion
     private func generateFollowKeyframes(
         fromPosition: CGPoint,
         scale: CGFloat,
@@ -557,72 +847,163 @@ final class ContinuousZoomController {
         
         guard !moveEvents.isEmpty else { return keyframes }
         
-        // Use One-Euro filter for smooth following (separate for x and y)
-        var smootherX = OneEuroFilter(
-            minCutoff: config.oneEuroMinCutoff * 1.5,  // Stronger smoothing for follow
-            beta: config.oneEuroBeta * 0.5,            // Less speed adaptation
-            dCutoff: config.oneEuroDCutoff
-        )
-        var smootherY = OneEuroFilter(
-            minCutoff: config.oneEuroMinCutoff * 1.5,
-            beta: config.oneEuroBeta * 0.5,
-            dCutoff: config.oneEuroDCutoff
-        )
+        // Sample cursor positions at high frequency
+        let sampleInterval: TimeInterval = 1.0 / 60.0  // 60fps sampling for smooth input
+        var rawSamples: [(time: TimeInterval, position: CGPoint)] = []
+        rawSamples.append((startTime, fromPosition))
         
-        // Sample and smooth the cursor path
-        var smoothedPoints: [(time: TimeInterval, position: CGPoint)] = []
-        smoothedPoints.append((startTime, fromPosition))
-        
-        var lastSampleTime: TimeInterval = startTime
-        let sampleInterval: TimeInterval = config.followKeyframeInterval
+        var lastSampleTime = startTime
         
         for event in moveEvents {
             guard event.timestamp >= startTime && event.timestamp <= endTime else { continue }
             
-            // Sample at regular intervals
             if event.timestamp - lastSampleTime >= sampleInterval {
-                let smoothedX = smootherX.filter(
-                    value: event.position.x,
-                    timestamp: event.timestamp
-                )
-                let smoothedY = smootherY.filter(
-                    value: event.position.y,
-                    timestamp: event.timestamp
-                )
-                let smoothed = CGPoint(x: smoothedX, y: smoothedY)
-                smoothedPoints.append((event.timestamp, smoothed))
+                rawSamples.append((event.timestamp, event.position))
                 lastSampleTime = event.timestamp
             }
         }
         
-        // Ensure we have the final position
+        // Ensure final position is captured
         if let lastEvent = moveEvents.last,
            lastEvent.timestamp > lastSampleTime,
            lastEvent.timestamp <= endTime {
-            let smoothedX = smootherX.filter(
-                value: lastEvent.position.x,
-                timestamp: lastEvent.timestamp
-            )
-            let smoothedY = smootherY.filter(
-                value: lastEvent.position.y,
-                timestamp: lastEvent.timestamp
-            )
-            let smoothed = CGPoint(x: smoothedX, y: smoothedY)
-            smoothedPoints.append((lastEvent.timestamp, smoothed))
+            rawSamples.append((lastEvent.timestamp, lastEvent.position))
         }
         
-        // Generate keyframes from smoothed points
-        for point in smoothedPoints {
-            let constrainedPosition = constrainCenter(point.position, at: scale)
+        guard rawSamples.count >= 2 else {
+            return keyframes
+        }
+        
+        // Generate spring-interpolated keyframes
+        // Camera "chases" cursor position with spring dynamics
+        let spring = SpringAnimation.gentle  // Smooth following
+        let outputInterval: TimeInterval = config.followKeyframeInterval  // Output rate
+        
+        var currentCameraPos = fromPosition
+        var currentVelocity = CGPoint.zero
+        var currentTime = startTime
+        
+        // Add initial keyframe
+        keyframes.append(ZoomKeyframe(
+            time: startTime,
+            scale: scale,
+            center: constrainCenterForCursor(fromPosition, cursorPosition: fromPosition, at: scale),
+            easing: .easeOut
+        ))
+        
+        // Simulate spring physics at each output interval
+        while currentTime < endTime {
+            currentTime += outputInterval
+            if currentTime > endTime { currentTime = endTime }
+            
+            // Find target cursor position at this time
+            let targetPosition = interpolateCursorPosition(at: currentTime, from: rawSamples)
+            
+            // Apply spring physics to camera position
+            // This creates smooth "chasing" behavior
+            let dt = outputInterval
+            let springResult = applySpringStep(
+                current: currentCameraPos,
+                target: targetPosition,
+                velocity: currentVelocity,
+                spring: spring,
+                dt: dt
+            )
+            
+            currentCameraPos = springResult.position
+            currentVelocity = springResult.velocity
+            
+            let constrainedCenter = constrainCenterForCursor(
+                currentCameraPos,
+                cursorPosition: targetPosition,
+                at: scale
+            )
+            
             keyframes.append(ZoomKeyframe(
-                time: point.time,
-                scale: scale,  // Maintain zoom level
-                center: constrainedPosition,
-                easing: .linear  // Linear for smooth following
+                time: currentTime,
+                scale: scale,
+                center: constrainedCenter,
+                easing: .easeOut
             ))
         }
         
         return keyframes
+    }
+    
+    /// Interpolate cursor position at a specific time from samples
+    private func interpolateCursorPosition(
+        at time: TimeInterval,
+        from samples: [(time: TimeInterval, position: CGPoint)]
+    ) -> CGPoint {
+        guard !samples.isEmpty else { return .zero }
+        guard samples.count > 1 else { return samples[0].position }
+        
+        // Find surrounding samples
+        var beforeIndex = 0
+        for (index, sample) in samples.enumerated() {
+            if sample.time <= time {
+                beforeIndex = index
+            } else {
+                break
+            }
+        }
+        
+        let afterIndex = min(beforeIndex + 1, samples.count - 1)
+        
+        if beforeIndex == afterIndex {
+            return samples[beforeIndex].position
+        }
+        
+        let before = samples[beforeIndex]
+        let after = samples[afterIndex]
+        
+        let t = (time - before.time) / (after.time - before.time)
+        
+        // Smooth step interpolation
+        let smoothT = t * t * (3 - 2 * t)
+        
+        return CGPoint(
+            x: before.position.x + (after.position.x - before.position.x) * smoothT,
+            y: before.position.y + (after.position.y - before.position.y) * smoothT
+        )
+    }
+    
+    /// Apply one step of spring physics simulation
+    private func applySpringStep(
+        current: CGPoint,
+        target: CGPoint,
+        velocity: CGPoint,
+        spring: SpringAnimation,
+        dt: TimeInterval
+    ) -> (position: CGPoint, velocity: CGPoint) {
+        // Spring force: F = -k * displacement - damping * velocity
+        // Using spring parameters: tension (k), friction (damping)
+        let displacement = CGPoint(
+            x: current.x - target.x,
+            y: current.y - target.y
+        )
+        
+        // Calculate spring force
+        let springForce = CGPoint(
+            x: -spring.tension * displacement.x - spring.friction * velocity.x,
+            y: -spring.tension * displacement.y - spring.friction * velocity.y
+        )
+        
+        // Apply force (F = ma, assume mass = 1 for simplicity)
+        let acceleration = springForce
+        
+        // Update velocity and position using semi-implicit Euler
+        let newVelocity = CGPoint(
+            x: velocity.x + acceleration.x * CGFloat(dt),
+            y: velocity.y + acceleration.y * CGFloat(dt)
+        )
+        
+        let newPosition = CGPoint(
+            x: current.x + newVelocity.x * CGFloat(dt),
+            y: current.y + newVelocity.y * CGFloat(dt)
+        )
+        
+        return (newPosition, newVelocity)
     }
     
     // MARK: - Keyframe Generation
@@ -634,24 +1015,89 @@ final class ContinuousZoomController {
         duration: TimeInterval,
         holdUntil: TimeInterval? = nil
     ) -> [ZoomKeyframe] {
-        let constrainedCenter = constrainCenter(center, at: scale)
-        var keyframes = [
-            // Ease In: zoom in to target
-            ZoomKeyframe(time: startTime, scale: 1.0, center: constrainedCenter, easing: config.easing),
-            ZoomKeyframe(time: startTime + duration, scale: scale, center: constrainedCenter, easing: config.easing)
-        ]
+        var keyframes: [ZoomKeyframe] = []
+        
+        // Use spring physics for cinematic "fast start, smooth landing" feel
+        let spring = SpringAnimation.stiff  // Fast and responsive
+        let steps = 12  // More steps for smoother animation (30fps equivalent)
+        
+        for i in 0...steps {
+            let t = TimeInterval(i) / TimeInterval(steps)
+            let time = startTime + t * duration
+            
+            // Spring progress creates natural deceleration
+            let springProgress = spring.progress(at: t * spring.settlingTime * 0.5)
+            
+            let currentScale = 1.0 + (scale - 1.0) * springProgress
+            
+            // For each frame, directly calculate the optimal center for current scale
+            // This ensures cursor is always visible regardless of zoom level
+            let currentConstrainedCenter = constrainCenterForCursor(
+                center,  // Target position
+                cursorPosition: center,
+                at: currentScale
+            )
+            
+            keyframes.append(ZoomKeyframe(
+                time: time,
+                scale: currentScale,
+                center: currentConstrainedCenter,
+                easing: .easeOut
+            ))
+        }
         
         // Add Hold keyframe if specified and there's enough time
         if let holdUntil {
+            let finalCenter = constrainCenterForCursor(center, cursorPosition: center, at: scale)
             let holdTime = max(startTime + duration, holdUntil)
             if holdTime > startTime + duration + 0.1 {  // At least 0.1s of hold
                 keyframes.append(ZoomKeyframe(
                     time: holdTime,
                     scale: scale,
-                    center: constrainedCenter,
+                    center: finalCenter,
                     easing: .linear
                 ))
             }
+        }
+        
+        return keyframes
+    }
+    
+    /// Generate zoom in keyframes using spring physics for natural motion
+    /// Used when interrupting zoom out or for smooth transitions
+    private func generateSpringZoomIn(
+        from fromCenter: CGPoint,
+        fromScale: CGFloat,
+        to toCenter: CGPoint,
+        toScale: CGFloat,
+        startTime: TimeInterval,
+        duration: TimeInterval
+    ) -> [ZoomKeyframe] {
+        var keyframes: [ZoomKeyframe] = []
+        
+        let spring = SpringAnimation.stiff  // Fast and snappy for responsive feel
+        let steps = 15  // More steps for smoother animation
+        
+        for i in 0...steps {
+            let t = TimeInterval(i) / TimeInterval(steps)
+            let time = startTime + t * duration
+            
+            // Use spring physics for both scale and position
+            let springProgress = spring.progress(at: t * spring.settlingTime * 0.6)
+            
+            let scale = fromScale + (toScale - fromScale) * springProgress
+            let center = CGPoint(
+                x: fromCenter.x + (toCenter.x - fromCenter.x) * springProgress,
+                y: fromCenter.y + (toCenter.y - fromCenter.y) * springProgress
+            )
+            
+            let constrainedCenter = constrainCenterForCursor(center, cursorPosition: toCenter, at: scale)
+            keyframes.append(ZoomKeyframe(
+                time: time,
+                scale: scale,
+                center: constrainedCenter,
+                easing: .easeOut
+            ))
         }
         
         return keyframes
@@ -662,11 +1108,38 @@ final class ContinuousZoomController {
         startTime: TimeInterval,
         duration: TimeInterval
     ) -> [ZoomKeyframe] {
-        let scale = dynamicZoom.zoomScaleWithCornerBoost(at: center)
-        return [
-            ZoomKeyframe(time: startTime, scale: scale, center: center, easing: config.easing),
-            ZoomKeyframe(time: startTime + duration, scale: 1.0, center: CGPoint(x: 0.5, y: 0.5), easing: config.easing)
-        ]
+        var keyframes: [ZoomKeyframe] = []
+        
+        let fromScale = dynamicZoom.zoomScaleWithCornerBoost(at: center)
+        let toScale: CGFloat = 1.0
+        let toCenter = CGPoint(x: 0.5, y: 0.5)
+        
+        // Use spring physics for natural zoom out motion
+        let spring = SpringAnimation.gentle
+        let steps = 15  // More steps for smoother animation
+        
+        for i in 0...steps {
+            let t = TimeInterval(i) / TimeInterval(steps)
+            let time = startTime + t * duration
+            
+            // Spring progress for natural deceleration
+            let springProgress = spring.progress(at: t * spring.settlingTime * 0.4)
+            
+            let scale = fromScale + (toScale - fromScale) * springProgress
+            let currentCenter = CGPoint(
+                x: center.x + (toCenter.x - center.x) * springProgress,
+                y: center.y + (toCenter.y - center.y) * springProgress
+            )
+            
+            keyframes.append(ZoomKeyframe(
+                time: time,
+                scale: scale,
+                center: currentCenter,
+                easing: .easeIn
+            ))
+        }
+        
+        return keyframes
     }
     
     private func generateSmoothTransition(
@@ -677,11 +1150,38 @@ final class ContinuousZoomController {
         startTime: TimeInterval,
         duration: TimeInterval
     ) -> [ZoomKeyframe] {
-        let constrainedTo = constrainCenter(toCenter, at: toScale)
-        return [
-            ZoomKeyframe(time: startTime, scale: fromScale, center: fromCenter, easing: config.easing),
-            ZoomKeyframe(time: startTime + duration, scale: toScale, center: constrainedTo, easing: config.easing)
-        ]
+        var keyframes: [ZoomKeyframe] = []
+        
+        // Use cursor-aware constraint for target position
+        let constrainedTo = constrainCenterForCursor(toCenter, cursorPosition: toCenter, at: toScale)
+        
+        // Use spring physics for natural motion
+        let spring = SpringAnimation.default
+        let steps = 12  // More steps for smoother animation
+        
+        for i in 0...steps {
+            let t = TimeInterval(i) / TimeInterval(steps)
+            let time = startTime + t * duration
+            
+            // Spring progress for natural deceleration
+            let springProgress = spring.progress(at: t * spring.settlingTime * 0.5)
+            
+            let scale = fromScale + (toScale - fromScale) * springProgress
+            let center = CGPoint(
+                x: fromCenter.x + (constrainedTo.x - fromCenter.x) * springProgress,
+                y: fromCenter.y + (constrainedTo.y - fromCenter.y) * springProgress
+            )
+            
+            let constrainedCenter = constrainCenterForCursor(center, cursorPosition: toCenter, at: scale)
+            keyframes.append(ZoomKeyframe(
+                time: time,
+                scale: scale,
+                center: constrainedCenter,
+                easing: .easeOut  // EaseOut for smooth landing
+            ))
+        }
+        
+        return keyframes
     }
     
     private func generateLargeDistanceTransition(
@@ -694,9 +1194,9 @@ final class ContinuousZoomController {
         
         let distance = hypot(toCenter.x - fromCenter.x, toCenter.y - fromCenter.y)
         
-        // Strategy: Parallel interpolation of scale and translation
-        // Total duration: 0.5-0.6s (faster than serial 0.8s)
-        // Interpolate both scale and center simultaneously
+        // Strategy: Two-phase spring transition
+        // Phase 1: Spring zoom out + partial move
+        // Phase 2: Spring zoom in + complete move
         
         // Determine intermediate scale based on distance
         let intermediateScale: CGFloat
@@ -709,57 +1209,60 @@ final class ContinuousZoomController {
         }
         
         let newScale = dynamicZoom.zoomScaleWithCornerBoost(at: toCenter)
-        let _ = constrainCenter(toCenter, at: newScale)  // Constraint checking
+        // Use cursor-aware constraint for the final target position
+        let finalConstrainedCenter = constrainCenterForCursor(toCenter, cursorPosition: toCenter, at: newScale)
         
         // Adaptive transition duration based on distance
-        // Formula: duration = baseTime + (distance * scalingFactor)
-        // - Short distance (<0.3): ~0.3s
-        // - Medium distance (0.3-0.6): ~0.4-0.5s
-        // - Long distance (>0.6): ~0.5-0.65s
         let baseDuration: TimeInterval = 0.25
-        let distanceScale: TimeInterval = 0.5  // Max additional time
+        let distanceScale: TimeInterval = 0.5
         let totalDuration = baseDuration + (Double(distance) * distanceScale)
         
-        // Generate keyframes at regular intervals for smooth interpolation
-        let steps = 5  // Number of intermediate steps
+        // Use spring physics for natural motion
+        let springOut = SpringAnimation.default   // For zoom out phase
+        let springIn = SpringAnimation.stiff      // Faster for zoom in phase
+        
+        // Generate keyframes with spring physics
+        let steps = 16  // More steps for smoother animation
         for i in 0...steps {
             let t = TimeInterval(i) / TimeInterval(steps)  // 0.0 to 1.0
             let time = startTime + t * totalDuration
             
-            // Parallel interpolation:
-            // - Scale: currentScale -> intermediateScale -> newScale (ease-in-out curve)
-            // - Center: fromCenter -> toCenter (ease-in-out curve)
-            
             let scale: CGFloat
             let center: CGPoint
+            let easing: EasingCurve
             
             if t < 0.5 {
-                // First half: zoom out while starting to move
+                // Phase 1: Spring zoom out while starting to move
                 let localT = t * 2.0  // 0.0 to 1.0
-                let easedT = easeInOut(localT)
-                scale = lerp(currentScale, intermediateScale, easedT)
+                let springProgress = springOut.progress(at: localT * springOut.settlingTime * 0.4)
+                
+                scale = currentScale + (intermediateScale - currentScale) * springProgress
                 center = CGPoint(
-                    x: lerp(fromCenter.x, toCenter.x, easedT * 0.6),  // Move partially
-                    y: lerp(fromCenter.y, toCenter.y, easedT * 0.6)
+                    x: fromCenter.x + (finalConstrainedCenter.x - fromCenter.x) * springProgress * 0.6,
+                    y: fromCenter.y + (finalConstrainedCenter.y - fromCenter.y) * springProgress * 0.6
                 )
+                easing = .easeIn
             } else {
-                // Second half: zoom in while completing movement
+                // Phase 2: Spring zoom in while completing movement
                 let localT = (t - 0.5) * 2.0  // 0.0 to 1.0
-                let easedT = easeInOut(localT)
-                scale = lerp(intermediateScale, newScale, easedT)
+                let springProgress = springIn.progress(at: localT * springIn.settlingTime * 0.5)
+                
+                scale = intermediateScale + (newScale - intermediateScale) * springProgress
+                let moveProgress = 0.6 + springProgress * 0.4  // Start from 60%, complete to 100%
                 center = CGPoint(
-                    x: lerp(fromCenter.x, toCenter.x, 0.6 + easedT * 0.4),  // Complete movement
-                    y: lerp(fromCenter.y, toCenter.y, 0.6 + easedT * 0.4)
+                    x: fromCenter.x + (finalConstrainedCenter.x - fromCenter.x) * moveProgress,
+                    y: fromCenter.y + (finalConstrainedCenter.y - fromCenter.y) * moveProgress
                 )
+                easing = .easeOut
             }
             
-            // Apply constraint to center based on current scale
-            let constrainedCenter = constrainCenter(center, at: scale)
+            // Apply cursor-aware constraint to center based on current scale
+            let constrainedCenter = constrainCenterForCursor(center, cursorPosition: toCenter, at: scale)
             keyframes.append(ZoomKeyframe(
                 time: time,
                 scale: scale,
                 center: constrainedCenter,
-                easing: config.easing
+                easing: easing
             ))
         }
         
@@ -836,7 +1339,7 @@ final class ContinuousZoomController {
             // 3. Emit follow keyframes at simplified points
             for point in simplified {
                 let scale = dynamicZoom.zoomScaleWithCornerBoost(at: point.position)
-                let constrainedCenter = constrainCenter(point.position, at: scale)
+                let constrainedCenter = constrainCenterForCursor(point.position, cursorPosition: point.position, at: scale)
                 result.append(ZoomKeyframe(
                     time: point.time,
                     scale: scale,
@@ -959,6 +1462,98 @@ final class ContinuousZoomController {
         let constrainedY = max(halfHeight, min(1.0 - halfHeight, center.y))
         
         return CGPoint(x: constrainedX, y: constrainedY)
+    }
+    
+    /// Constrain center while ensuring cursor remains visible with surrounding context
+    /// For corner/edge clicks, position center so cursor is visible but not at extreme edge of view
+    private func constrainCenterForCursor(
+        _ center: CGPoint,
+        cursorPosition: CGPoint,
+        at scale: CGFloat
+    ) -> CGPoint {
+        guard scale > 1.0 else { return center }
+        
+        let visibleWidth = 1.0 / scale
+        let visibleHeight = 1.0 / scale
+        let halfWidth = visibleWidth / 2
+        let halfHeight = visibleHeight / 2
+        
+        // Valid center range (ensures visible area stays within screen bounds)
+        let minCenterX = halfWidth
+        let maxCenterX = 1.0 - halfWidth
+        let minCenterY = halfHeight
+        let maxCenterY = 1.0 - halfHeight
+        
+        // Safety margin from edge - cursor should not be at the absolute edge of view
+        let safetyMargin: CGFloat = 0.05  // 5% from edge
+        let safeHalfWidth = halfWidth * (1.0 - safetyMargin)
+        let safeHalfHeight = halfHeight * (1.0 - safetyMargin)
+        
+        var resultCenter = CGPoint.zero
+        
+        // X axis: Calculate center that keeps cursor visible
+        // First calculate the range of centers that keep cursor within safe zone
+        let minCenterForCursorX = cursorPosition.x - safeHalfWidth
+        let maxCenterForCursorX = cursorPosition.x + safeHalfWidth
+        
+        // Find intersection with valid center range
+        let validMinX = max(minCenterX, minCenterForCursorX)
+        let validMaxX = min(maxCenterX, maxCenterForCursorX)
+        
+        if validMinX <= validMaxX {
+            // Valid range exists - prefer cursor near center of view
+            resultCenter.x = max(validMinX, min(validMaxX, cursorPosition.x))
+        } else {
+            // No valid range with safety margin - cursor at extreme corner
+            // Choose the boundary that keeps cursor most visible
+            if cursorPosition.x > 0.5 {
+                resultCenter.x = maxCenterX
+            } else {
+                resultCenter.x = minCenterX
+            }
+        }
+        
+        // Y axis: Same logic
+        let minCenterForCursorY = cursorPosition.y - safeHalfHeight
+        let maxCenterForCursorY = cursorPosition.y + safeHalfHeight
+        
+        let validMinY = max(minCenterY, minCenterForCursorY)
+        let validMaxY = min(maxCenterY, maxCenterForCursorY)
+        
+        if validMinY <= validMaxY {
+            resultCenter.y = max(validMinY, min(validMaxY, cursorPosition.y))
+        } else {
+            if cursorPosition.y > 0.5 {
+                resultCenter.y = maxCenterY
+            } else {
+                resultCenter.y = minCenterY
+            }
+        }
+        
+        // Final check: If cursor still outside visible area, adjust
+        // This handles extreme corners where safety margin cannot be maintained
+        let cursorRelX = cursorPosition.x - resultCenter.x
+        let cursorRelY = cursorPosition.y - resultCenter.y
+        
+        // Cursor must be within view (use full halfWidth, not safe)
+        if cursorRelX > halfWidth * 0.98 {
+            // Push center right to bring cursor into view
+            let adjustment = cursorRelX - halfWidth * 0.95
+            resultCenter.x = min(maxCenterX, resultCenter.x + adjustment)
+        } else if cursorRelX < -halfWidth * 0.98 {
+            let adjustment = -halfWidth * 0.95 - cursorRelX
+            resultCenter.x = max(minCenterX, resultCenter.x - adjustment)
+        }
+        
+        if cursorRelY > halfHeight * 0.98 {
+            let adjustment = cursorRelY - halfHeight * 0.95
+            resultCenter.y = min(maxCenterY, resultCenter.y + adjustment)
+        } else if cursorRelY < -halfHeight * 0.98 {
+            let adjustment = -halfHeight * 0.95 - cursorRelY
+            resultCenter.y = max(minCenterY, resultCenter.y - adjustment)
+        }
+        
+        return resultCenter
     }
     
     private func deduplicateKeyframes(_ keyframes: [ZoomKeyframe]) -> [ZoomKeyframe] {

@@ -153,7 +153,7 @@ smart-screen/
 ### Phase 2: 体验增强 ✅ 完成
 - [x] Cursor Smoothing
 - [x] Click Highlight
-- [x] Auto Zoom (v3.1 - 含跟随模式)
+- [x] Auto Zoom (v5.0 - 弹簧物理动画 + 智能角落处理)
 - [ ] Timeline 基础剪辑
 
 ### Phase 3: 进阶功能
