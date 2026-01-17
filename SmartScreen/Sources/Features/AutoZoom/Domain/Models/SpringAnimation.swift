@@ -1,7 +1,130 @@
 import Foundation
 import CoreGraphics
+import SwiftUI
 
-/// Spring animation model based on damped harmonic oscillator physics
+// MARK: - Native Spring (SwiftUI API)
+
+/// SwiftUI 原生 Spring 包装器（macOS 14.0+）
+/// 使用更直观的 duration 和 bounce 参数，提供流畅的弹簧动画
+///
+/// 参考: https://github.com/GetStream/swiftui-spring-animations
+struct NativeSpring: Equatable {
+    
+    /// The underlying SwiftUI Spring
+    let spring: Spring
+    
+    /// Perceived duration of the animation
+    let duration: Double
+    
+    /// Bounce amount: -1.0 (overdamped) to 1.0 (very bouncy), 0 = critically damped
+    let bounce: Double
+    
+    // MARK: - Initialization
+    
+    init(duration: Double = 0.5, bounce: Double = 0.0) {
+        self.duration = max(0.01, duration)
+        self.bounce = max(-1.0, min(1.0, bounce))
+        self.spring = Spring(duration: self.duration, bounce: self.bounce)
+    }
+    
+    // MARK: - Value Calculation
+    
+    /// Calculate the animated value at a given time (0 -> target)
+    /// - Parameters:
+    ///   - target: Target value to animate towards
+    ///   - time: Time since animation start (seconds)
+    /// - Returns: The interpolated value at the given time
+    func value(target: CGFloat, time: TimeInterval) -> CGFloat {
+        spring.value(target: target, time: time)
+    }
+    
+    /// Calculate the velocity at a given time
+    func velocity(target: CGFloat, time: TimeInterval) -> CGFloat {
+        spring.velocity(target: target, time: time)
+    }
+    
+    /// Calculate progress from 0 to 1 at a given time
+    func progress(at time: TimeInterval) -> CGFloat {
+        let val = value(target: 1.0, time: time)
+        return max(0, min(1, val))
+    }
+    
+    /// Calculate the animated value between two values
+    func value(at time: TimeInterval, from: CGFloat, to: CGFloat, initialVelocity: CGFloat = 0) -> CGFloat {
+        let displacement = to - from
+        guard abs(displacement) > 0.0001 else { return to }
+        
+        // SwiftUI Spring handles velocity internally through value calculation
+        let normalizedValue = value(target: 1.0, time: time)
+        return from + displacement * normalizedValue
+    }
+    
+    /// Check if animation has settled
+    func isSettled(at time: TimeInterval, threshold: CGFloat = 0.001) -> Bool {
+        let currentValue = value(target: 1.0, time: time)
+        let currentVelocity = velocity(target: 1.0, time: time)
+        return abs(currentValue - 1.0) < threshold && abs(currentVelocity) < threshold
+    }
+    
+    // MARK: - Physics Parameters (for step-by-step simulation)
+    
+    /// Spring stiffness (tension) - derived from SwiftUI Spring
+    var stiffness: CGFloat { spring.stiffness }
+    
+    /// Spring damping (friction) - derived from SwiftUI Spring
+    var damping: CGFloat { spring.damping }
+}
+
+// MARK: - NativeSpring CGPoint Extension
+
+extension NativeSpring {
+    
+    /// Animate a CGPoint from one position to another
+    func value(
+        at time: TimeInterval,
+        from: CGPoint,
+        to: CGPoint,
+        initialVelocity: CGPoint = .zero
+    ) -> CGPoint {
+        let progress = self.progress(at: time)
+        return CGPoint(
+            x: from.x + (to.x - from.x) * progress,
+            y: from.y + (to.y - from.y) * progress
+        )
+    }
+}
+
+// MARK: - NativeSpring Presets
+
+extension NativeSpring {
+    
+    /// Snappy spring - fast and responsive, no bounce
+    /// Best for: Zoom In, quick interactions
+    static let snappy = NativeSpring(duration: 0.3, bounce: 0.0)
+    
+    /// Smooth spring - medium speed, no bounce
+    /// Best for: Zoom Out, general transitions
+    static let smooth = NativeSpring(duration: 0.5, bounce: 0.0)
+    
+    /// Gentle spring - slower with slight bounce
+    /// Best for: Follow mode, subtle animations
+    static let gentle = NativeSpring(duration: 0.6, bounce: 0.15)
+    
+    /// Bouncy spring - noticeable bounce
+    /// Best for: Playful UI, emphasis
+    static let bouncy = NativeSpring(duration: 0.5, bounce: 0.3)
+    
+    /// Default spring - balanced feel
+    static let `default` = NativeSpring(duration: 0.4, bounce: 0.0)
+    
+    /// Interactive spring - very fast for gesture-driven animations
+    static let interactive = NativeSpring(duration: 0.25, bounce: 0.0)
+}
+
+// MARK: - Legacy Spring Animation
+
+/// Legacy spring animation model based on damped harmonic oscillator physics
+/// Kept for backwards compatibility
 ///
 /// Uses the differential equation: x''(t) + (friction/mass) * x'(t) + (tension/mass) * x(t) = 0
 /// This creates natural-feeling animations with inertia and smooth deceleration.

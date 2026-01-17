@@ -303,19 +303,21 @@ final class ContinuousZoomController {
                 // Remove the zoom out keyframes that haven't started yet
                 keyframes = keyframes.filter { $0.time < clickTime }
                 
-                // Calculate current scale at interruption point using spring physics
-                let zoomOutProgress = (clickTime - zoomOut.startTime) / config.zoomOutDuration
-                let spring = SpringAnimation.default
-                let currentScale = spring.value(
-                    at: zoomOutProgress * spring.settlingTime,
-                    from: lastZoomScale,
-                    to: 1.0
-                )
+                // Calculate current state at interruption point using NativeSpring
+                let elapsedTime = clickTime - zoomOut.startTime
+                let spring = NativeSpring.smooth  // Same spring used for zoom out
+                let springProgress = spring.progress(at: elapsedTime)
+                let currentScale = lastZoomScale + (1.0 - lastZoomScale) * springProgress
                 
-                // Calculate current center (interpolated between old center and screen center)
+                // Calculate current velocity for smooth continuation
+                let scaleVelocity = spring.velocity(target: 1.0, time: elapsedTime)
+                let centerVelocityX = spring.velocity(target: 1.0, time: elapsedTime) * (0.5 - zoomOut.fromCenter.x)
+                let centerVelocityY = spring.velocity(target: 1.0, time: elapsedTime) * (0.5 - zoomOut.fromCenter.y)
+                
+                // Calculate current center using spring progress
                 let currentCenter = CGPoint(
-                    x: zoomOut.fromCenter.x + (0.5 - zoomOut.fromCenter.x) * CGFloat(zoomOutProgress),
-                    y: zoomOut.fromCenter.y + (0.5 - zoomOut.fromCenter.y) * CGFloat(zoomOutProgress)
+                    x: zoomOut.fromCenter.x + (0.5 - zoomOut.fromCenter.x) * springProgress,
+                    y: zoomOut.fromCenter.y + (0.5 - zoomOut.fromCenter.y) * springProgress
                 )
                 
                 // Add interruption keyframe at current position
@@ -326,17 +328,19 @@ final class ContinuousZoomController {
                     easing: .easeOut
                 ))
                 
-                // Zoom in to new click position with spring animation
+                // Zoom in to new click position with spring animation, preserving momentum
                 let newScale = dynamicZoom.zoomScaleWithCornerBoost(at: clickPosition)
                 let constrainedPosition = constrainCenterForCursor(clickPosition, cursorPosition: clickPosition, at: newScale)
                 
-                keyframes.append(contentsOf: generateSpringZoomIn(
+                keyframes.append(contentsOf: generateSpringZoomInWithVelocity(
                     from: currentCenter,
                     fromScale: currentScale,
                     to: constrainedPosition,
                     toScale: newScale,
                     startTime: clickTime,
-                    duration: config.zoomInDuration
+                    duration: config.zoomInDuration,
+                    initialScaleVelocity: scaleVelocity,
+                    initialCenterVelocity: CGPoint(x: centerVelocityX, y: centerVelocityY)
                 ))
                 
                 currentState = .zoomed(at: constrainedPosition)
@@ -876,7 +880,7 @@ final class ContinuousZoomController {
         
         // Generate spring-interpolated keyframes
         // Camera "chases" cursor position with spring dynamics
-        let spring = SpringAnimation.gentle  // Smooth following
+        let spring = NativeSpring.gentle  // Smooth following
         let outputInterval: TimeInterval = config.followKeyframeInterval  // Output rate
         
         var currentCameraPos = fromPosition
@@ -973,20 +977,20 @@ final class ContinuousZoomController {
         current: CGPoint,
         target: CGPoint,
         velocity: CGPoint,
-        spring: SpringAnimation,
+        spring: NativeSpring,
         dt: TimeInterval
     ) -> (position: CGPoint, velocity: CGPoint) {
         // Spring force: F = -k * displacement - damping * velocity
-        // Using spring parameters: tension (k), friction (damping)
+        // Using spring parameters: stiffness (k), damping
         let displacement = CGPoint(
             x: current.x - target.x,
             y: current.y - target.y
         )
         
-        // Calculate spring force
+        // Calculate spring force using NativeSpring's stiffness and damping
         let springForce = CGPoint(
-            x: -spring.tension * displacement.x - spring.friction * velocity.x,
-            y: -spring.tension * displacement.y - spring.friction * velocity.y
+            x: -spring.stiffness * displacement.x - spring.damping * velocity.x,
+            y: -spring.stiffness * displacement.y - spring.damping * velocity.y
         )
         
         // Apply force (F = ma, assume mass = 1 for simplicity)
@@ -1017,16 +1021,17 @@ final class ContinuousZoomController {
     ) -> [ZoomKeyframe] {
         var keyframes: [ZoomKeyframe] = []
         
-        // Use spring physics for cinematic "fast start, smooth landing" feel
-        let spring = SpringAnimation.stiff  // Fast and responsive
-        let steps = 12  // More steps for smoother animation (30fps equivalent)
+        // Use NativeSpring with snappy preset for fast, responsive zoom in
+        let spring = NativeSpring.snappy
+        let steps = 15  // More steps for smoother animation
         
         for i in 0...steps {
             let t = TimeInterval(i) / TimeInterval(steps)
             let time = startTime + t * duration
             
-            // Spring progress creates natural deceleration
-            let springProgress = spring.progress(at: t * spring.settlingTime * 0.5)
+            // Use real time for spring calculation
+            let realTime = t * duration
+            let springProgress = spring.progress(at: realTime)
             
             let currentScale = 1.0 + (scale - 1.0) * springProgress
             
@@ -1075,15 +1080,17 @@ final class ContinuousZoomController {
     ) -> [ZoomKeyframe] {
         var keyframes: [ZoomKeyframe] = []
         
-        let spring = SpringAnimation.stiff  // Fast and snappy for responsive feel
+        // Use NativeSpring with snappy preset for fast, responsive transitions
+        let spring = NativeSpring.snappy
         let steps = 15  // More steps for smoother animation
         
         for i in 0...steps {
             let t = TimeInterval(i) / TimeInterval(steps)
             let time = startTime + t * duration
             
-            // Use spring physics for both scale and position
-            let springProgress = spring.progress(at: t * spring.settlingTime * 0.6)
+            // Use real time for spring calculation
+            let realTime = t * duration
+            let springProgress = spring.progress(at: realTime)
             
             let scale = fromScale + (toScale - fromScale) * springProgress
             let center = CGPoint(
@@ -1103,6 +1110,73 @@ final class ContinuousZoomController {
         return keyframes
     }
     
+    /// Generate zoom in keyframes with velocity preservation for smooth interruptions
+    /// This method accounts for the current velocity when an animation is interrupted,
+    /// creating seamless transitions without abrupt stops or direction changes.
+    private func generateSpringZoomInWithVelocity(
+        from fromCenter: CGPoint,
+        fromScale: CGFloat,
+        to toCenter: CGPoint,
+        toScale: CGFloat,
+        startTime: TimeInterval,
+        duration: TimeInterval,
+        initialScaleVelocity: CGFloat,
+        initialCenterVelocity: CGPoint
+    ) -> [ZoomKeyframe] {
+        var keyframes: [ZoomKeyframe] = []
+        
+        // Use NativeSpring - the spring physics naturally handles velocity continuation
+        let spring = NativeSpring.snappy
+        let steps = 15
+        
+        // Apply velocity influence for the first few frames
+        // The spring will naturally dampen this over time
+        let velocityDamping: CGFloat = 0.8
+        var scaleDelta: CGFloat = 0
+        var centerDelta = CGPoint.zero
+        
+        for i in 0...steps {
+            let t = TimeInterval(i) / TimeInterval(steps)
+            let time = startTime + t * duration
+            let realTime = t * duration
+            
+            // Spring progress with momentum consideration
+            let springProgress = spring.progress(at: realTime)
+            
+            // Apply velocity influence that decays over time
+            let velocityInfluence = pow(velocityDamping, CGFloat(i))
+            scaleDelta = initialScaleVelocity * CGFloat(realTime) * velocityInfluence * 0.1
+            centerDelta = CGPoint(
+                x: initialCenterVelocity.x * CGFloat(realTime) * velocityInfluence * 0.1,
+                y: initialCenterVelocity.y * CGFloat(realTime) * velocityInfluence * 0.1
+            )
+            
+            // Calculate base values from spring
+            let baseScale = fromScale + (toScale - fromScale) * springProgress
+            let baseCenter = CGPoint(
+                x: fromCenter.x + (toCenter.x - fromCenter.x) * springProgress,
+                y: fromCenter.y + (toCenter.y - fromCenter.y) * springProgress
+            )
+            
+            // Apply velocity offset (blended with spring to avoid overshoot)
+            let scale = baseScale + scaleDelta * (1 - springProgress)
+            let center = CGPoint(
+                x: baseCenter.x + centerDelta.x * (1 - springProgress),
+                y: baseCenter.y + centerDelta.y * (1 - springProgress)
+            )
+            
+            let constrainedCenter = constrainCenterForCursor(center, cursorPosition: toCenter, at: scale)
+            keyframes.append(ZoomKeyframe(
+                time: time,
+                scale: max(1.0, scale),  // Ensure scale doesn't go below 1.0
+                center: constrainedCenter,
+                easing: .easeOut
+            ))
+        }
+        
+        return keyframes
+    }
+    
     private func generateZoomOut(
         from center: CGPoint,
         startTime: TimeInterval,
@@ -1114,16 +1188,17 @@ final class ContinuousZoomController {
         let toScale: CGFloat = 1.0
         let toCenter = CGPoint(x: 0.5, y: 0.5)
         
-        // Use spring physics for natural zoom out motion
-        let spring = SpringAnimation.gentle
+        // Use NativeSpring with smooth preset for natural zoom out
+        let spring = NativeSpring.smooth
         let steps = 15  // More steps for smoother animation
         
         for i in 0...steps {
             let t = TimeInterval(i) / TimeInterval(steps)
             let time = startTime + t * duration
             
-            // Spring progress for natural deceleration
-            let springProgress = spring.progress(at: t * spring.settlingTime * 0.4)
+            // Use real time for spring calculation
+            let realTime = t * duration
+            let springProgress = spring.progress(at: realTime)
             
             let scale = fromScale + (toScale - fromScale) * springProgress
             let currentCenter = CGPoint(
@@ -1155,16 +1230,17 @@ final class ContinuousZoomController {
         // Use cursor-aware constraint for target position
         let constrainedTo = constrainCenterForCursor(toCenter, cursorPosition: toCenter, at: toScale)
         
-        // Use spring physics for natural motion
-        let spring = SpringAnimation.default
-        let steps = 12  // More steps for smoother animation
+        // Use NativeSpring with default preset for balanced transitions
+        let spring = NativeSpring.default
+        let steps = 15  // More steps for smoother animation
         
         for i in 0...steps {
             let t = TimeInterval(i) / TimeInterval(steps)
             let time = startTime + t * duration
             
-            // Spring progress for natural deceleration
-            let springProgress = spring.progress(at: t * spring.settlingTime * 0.5)
+            // Use real time for spring calculation
+            let realTime = t * duration
+            let springProgress = spring.progress(at: realTime)
             
             let scale = fromScale + (toScale - fromScale) * springProgress
             let center = CGPoint(
@@ -1217,9 +1293,12 @@ final class ContinuousZoomController {
         let distanceScale: TimeInterval = 0.5
         let totalDuration = baseDuration + (Double(distance) * distanceScale)
         
-        // Use spring physics for natural motion
-        let springOut = SpringAnimation.default   // For zoom out phase
-        let springIn = SpringAnimation.stiff      // Faster for zoom in phase
+        // Use NativeSpring for natural motion
+        let springOut = NativeSpring.smooth   // For zoom out phase
+        let springIn = NativeSpring.snappy    // Faster for zoom in phase
+        
+        // Each phase gets half of total duration
+        let phaseDuration = totalDuration / 2.0
         
         // Generate keyframes with spring physics
         let steps = 16  // More steps for smoother animation
@@ -1234,7 +1313,8 @@ final class ContinuousZoomController {
             if t < 0.5 {
                 // Phase 1: Spring zoom out while starting to move
                 let localT = t * 2.0  // 0.0 to 1.0
-                let springProgress = springOut.progress(at: localT * springOut.settlingTime * 0.4)
+                let realTime = localT * phaseDuration
+                let springProgress = springOut.progress(at: realTime)
                 
                 scale = currentScale + (intermediateScale - currentScale) * springProgress
                 center = CGPoint(
@@ -1245,7 +1325,8 @@ final class ContinuousZoomController {
             } else {
                 // Phase 2: Spring zoom in while completing movement
                 let localT = (t - 0.5) * 2.0  // 0.0 to 1.0
-                let springProgress = springIn.progress(at: localT * springIn.settlingTime * 0.5)
+                let realTime = localT * phaseDuration
+                let springProgress = springIn.progress(at: realTime)
                 
                 scale = intermediateScale + (newScale - intermediateScale) * springProgress
                 let moveProgress = 0.6 + springProgress * 0.4  // Start from 60%, complete to 100%
